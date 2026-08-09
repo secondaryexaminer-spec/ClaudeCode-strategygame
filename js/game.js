@@ -176,6 +176,184 @@
   }
   var saveStore = createLocalStorageBackend();
 
+  // src/core/grid.js
+  function makeGrid(W, H, fill) {
+    return Array.from({ length: H }, () => Array(W).fill(fill));
+  }
+  function inBounds(W, H, x, y) {
+    return x >= 0 && y >= 0 && x < W && y < H;
+  }
+  function adjacent4(W, H, x, y) {
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(W, H, cell.x, cell.y));
+  }
+  function adjacent8(W, H, x, y) {
+    return [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(W, H, cell.x, cell.y));
+  }
+
+  // src/world/mapgen.js
+  function createEllipse(W, H, terrain, cx, cy, rx, ry, fillTerrain, chance = 1) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const nx = (x - cx) / rx;
+        const ny = (y - cy) / ry;
+        if (nx * nx + ny * ny <= 1 && Math.random() <= chance) {
+          terrain[y][x] = fillTerrain;
+        }
+      }
+    }
+  }
+  function paintRiver(W, H, terrain, center, phase = 0) {
+    for (let y = 0; y < H; y++) {
+      const riverX = Math.round(center + Math.sin(y * 0.65 + phase) * 1.6 + Math.sin(y * 0.19) * 0.8);
+      terrain[y][clamp(riverX, 1, W - 2)] = "water";
+      if (y % 5 === 2) {
+        terrain[y][clamp(riverX, 1, W - 2)] = "road";
+      }
+    }
+  }
+  function paintRidge(W, H, terrain, center) {
+    for (let x = 0; x < W; x++) {
+      const ridgeY = Math.round(center + Math.sin(x * 0.52) * 1.7 + Math.sin(x * 0.18) * 1.1);
+      for (let dy = -1; dy <= 1; dy++) {
+        const y = clamp(ridgeY + dy, 1, H - 2);
+        terrain[y][x] = "mountain";
+      }
+      if (x % 7 === 3) {
+        terrain[clamp(ridgeY, 1, H - 2)][x] = "road";
+      }
+    }
+  }
+  function addRoadCross(W, H, terrain) {
+    const midY = Math.floor(H / 2);
+    const midX = Math.floor(W / 2);
+    for (let x = 1; x < W - 1; x++) {
+      if (terrain[midY][x] !== "water" && terrain[midY][x] !== "mountain") {
+        terrain[midY][x] = "road";
+      }
+    }
+    for (let y = 1; y < H - 1; y++) {
+      if (terrain[y][midX] !== "water" && terrain[y][midX] !== "mountain") {
+        terrain[y][midX] = "road";
+      }
+    }
+  }
+  function scatter(W, H, terrain, type, count, radius, allowed) {
+    for (let i = 0; i < count; i++) {
+      const cx = rnd(W);
+      const cy = rnd(H);
+      const r = 1 + rnd(radius);
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          if (!inBounds(W, H, x, y) || !allowed.includes(terrain[y][x])) {
+            continue;
+          }
+          if (Math.hypot(dx, dy) <= r + 0.4 && Math.random() > 0.18) {
+            terrain[y][x] = type;
+          }
+        }
+      }
+    }
+  }
+  function terrainFor(mapId, complexityId, W, H) {
+    const terrain = makeGrid(W, H, "plain");
+    const complexity = COMPLEX[complexityId];
+    switch (mapId) {
+      case "frontier":
+        paintRiver(W, H, terrain, W * 0.48, 0);
+        paintRidge(W, H, terrain, H * 0.26);
+        break;
+      case "twinrivers":
+        paintRiver(W, H, terrain, W * 0.34, 0.25);
+        paintRiver(W, H, terrain, W * 0.67, 1.15);
+        break;
+      case "highlands":
+        paintRidge(W, H, terrain, H * 0.38);
+        paintRidge(W, H, terrain, H * 0.68);
+        break;
+      case "plains":
+        addRoadCross(W, H, terrain);
+        break;
+      case "heartland":
+        addRoadCross(W, H, terrain);
+        createEllipse(W, H, terrain, W * 0.2, H * 0.25, 4, 2, "forest", 0.94);
+        createEllipse(W, H, terrain, W * 0.78, H * 0.72, 4, 3, "forest", 0.94);
+        break;
+      case "coast":
+        for (let y = 0; y < H; y++) {
+          const shore = Math.floor(W * 0.22 + Math.sin(y * 0.42) * 2);
+          for (let x = 0; x <= shore; x++) {
+            terrain[y][x] = "water";
+          }
+        }
+        paintRidge(W, H, terrain, H * 0.7);
+        break;
+      case "islands":
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            terrain[y][x] = "water";
+          }
+        }
+        createEllipse(W, H, terrain, W * 0.22, H * 0.48, 5, 3, "plain", 0.96);
+        createEllipse(W, H, terrain, W * 0.5, H * 0.3, 4, 2, "plain", 0.95);
+        createEllipse(W, H, terrain, W * 0.72, H * 0.66, 6, 3, "plain", 0.95);
+        createEllipse(W, H, terrain, W * 0.45, H * 0.78, 3, 2, "plain", 0.92);
+        break;
+      case "innersea":
+        createEllipse(W, H, terrain, W * 0.5, H * 0.52, W * 0.22, H * 0.3, "water", 0.98);
+        addRoadCross(W, H, terrain);
+        break;
+      case "grandbay":
+        createEllipse(W, H, terrain, W * 0.14, H * 0.78, W * 0.36, H * 0.42, "water", 0.98);
+        createEllipse(W, H, terrain, W * 0.42, H * 0.58, 3, 2, "water", 0.9);
+        break;
+      case "strait":
+        for (let y = 0; y < H; y++) {
+          const seaX = Math.floor(W * 0.5 + Math.sin(y * 0.42) * 1.1);
+          for (let dx = -2; dx <= 2; dx++) {
+            if (inBounds(W, H, seaX + dx, y)) {
+              terrain[y][seaX + dx] = "water";
+            }
+          }
+        }
+        createEllipse(W, H, terrain, W * 0.48, H * 0.24, 2, 1, "plain", 1);
+        createEllipse(W, H, terrain, W * 0.5, H * 0.73, 2, 1, "plain", 1);
+        break;
+      case "archipelago":
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            terrain[y][x] = "water";
+          }
+        }
+        createEllipse(W, H, terrain, W * 0.28, H * 0.34, 5, 3, "plain", 0.96);
+        createEllipse(W, H, terrain, W * 0.62, H * 0.25, 4, 2, "plain", 0.94);
+        createEllipse(W, H, terrain, W * 0.77, H * 0.62, 6, 3, "plain", 0.95);
+        createEllipse(W, H, terrain, W * 0.44, H * 0.72, 5, 2, "plain", 0.93);
+        createEllipse(W, H, terrain, W * 0.12, H * 0.74, 3, 2, "plain", 0.92);
+        break;
+      case "random":
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            const roll = Math.random();
+            terrain[y][x] = roll < complexity.water ? "water" : roll < complexity.water + complexity.mountain ? "mountain" : roll < complexity.water + complexity.mountain + complexity.forest ? "forest" : "plain";
+          }
+        }
+        addRoadCross(W, H, terrain);
+        break;
+      default:
+        break;
+    }
+    if (mapId !== "random") {
+      scatter(W, H, terrain, "forest", Math.max(2, Math.round(W * H * complexity.forest / 24)), 2, ["plain"]);
+      scatter(W, H, terrain, "mountain", Math.max(1, Math.round(W * H * complexity.mountain / 34)), 1, ["plain"]);
+      if (!MAPS[mapId].sea) {
+        scatter(W, H, terrain, "water", Math.max(0, Math.round(W * H * complexity.water / 70)), 1, ["plain"]);
+      }
+    }
+    return terrain;
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -200,17 +378,14 @@
       shipyardCargo: ["none", "none", "none", "none", "none"],
       engineerCargo: ["none", "none", "none", "none", "none"]
     };
-    function inBounds(x, y) {
-      return x >= 0 && y >= 0 && x < W && y < H;
+    function inBounds2(x, y) {
+      return inBounds(W, H, x, y);
     }
-    function grid(fill) {
-      return Array.from({ length: H }, () => Array(W).fill(fill));
+    function adjacent42(x, y) {
+      return adjacent4(W, H, x, y);
     }
-    function adjacent4(x, y) {
-      return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(cell.x, cell.y));
-    }
-    function adjacent8(x, y) {
-      return [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(cell.x, cell.y));
+    function adjacent82(x, y) {
+      return adjacent8(W, H, x, y);
     }
     function ownerColor(owner) {
       if (game?.ownerColors?.[owner]) {
@@ -685,13 +860,13 @@
       return game.sites.find((entry) => entry.x === x && entry.y === y);
     }
     function isLandTile(x, y) {
-      return inBounds(x, y) && game.terrain[y][x] !== "water" && game.terrain[y][x] !== "mountain";
+      return inBounds2(x, y) && game.terrain[y][x] !== "water" && game.terrain[y][x] !== "mountain";
     }
     function isWaterTile(x, y) {
-      return inBounds(x, y) && game.terrain[y][x] === "water";
+      return inBounds2(x, y) && game.terrain[y][x] === "water";
     }
     function isCoastalWater(x, y) {
-      return isWaterTile(x, y) && adjacent8(x, y).some((cell) => isLandTile(cell.x, cell.y));
+      return isWaterTile(x, y) && adjacent82(x, y).some((cell) => isLandTile(cell.x, cell.y));
     }
     function isDeepWater(x, y) {
       if (!isWaterTile(x, y)) {
@@ -856,168 +1031,6 @@
         game.pendingOrder = null;
       }
     }
-    function createEllipse(terrain, cx, cy, rx, ry, fillTerrain, chance = 1) {
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const nx = (x - cx) / rx;
-          const ny = (y - cy) / ry;
-          if (nx * nx + ny * ny <= 1 && Math.random() <= chance) {
-            terrain[y][x] = fillTerrain;
-          }
-        }
-      }
-    }
-    function paintRiver(terrain, center, phase = 0) {
-      for (let y = 0; y < H; y++) {
-        const riverX = Math.round(center + Math.sin(y * 0.65 + phase) * 1.6 + Math.sin(y * 0.19) * 0.8);
-        terrain[y][clamp(riverX, 1, W - 2)] = "water";
-        if (y % 5 === 2) {
-          terrain[y][clamp(riverX, 1, W - 2)] = "road";
-        }
-      }
-    }
-    function paintRidge(terrain, center) {
-      for (let x = 0; x < W; x++) {
-        const ridgeY = Math.round(center + Math.sin(x * 0.52) * 1.7 + Math.sin(x * 0.18) * 1.1);
-        for (let dy = -1; dy <= 1; dy++) {
-          const y = clamp(ridgeY + dy, 1, H - 2);
-          terrain[y][x] = "mountain";
-        }
-        if (x % 7 === 3) {
-          terrain[clamp(ridgeY, 1, H - 2)][x] = "road";
-        }
-      }
-    }
-    function addRoadCross(terrain) {
-      const midY = Math.floor(H / 2);
-      const midX = Math.floor(W / 2);
-      for (let x = 1; x < W - 1; x++) {
-        if (terrain[midY][x] !== "water" && terrain[midY][x] !== "mountain") {
-          terrain[midY][x] = "road";
-        }
-      }
-      for (let y = 1; y < H - 1; y++) {
-        if (terrain[y][midX] !== "water" && terrain[y][midX] !== "mountain") {
-          terrain[y][midX] = "road";
-        }
-      }
-    }
-    function scatter(terrain, type, count, radius, allowed) {
-      for (let i = 0; i < count; i++) {
-        const cx = rnd(W);
-        const cy = rnd(H);
-        const r = 1 + rnd(radius);
-        for (let dy = -r; dy <= r; dy++) {
-          for (let dx = -r; dx <= r; dx++) {
-            const x = cx + dx;
-            const y = cy + dy;
-            if (!inBounds(x, y) || !allowed.includes(terrain[y][x])) {
-              continue;
-            }
-            if (Math.hypot(dx, dy) <= r + 0.4 && Math.random() > 0.18) {
-              terrain[y][x] = type;
-            }
-          }
-        }
-      }
-    }
-    function terrainFor(mapId, complexityId) {
-      const terrain = grid("plain");
-      const complexity = COMPLEX[complexityId];
-      switch (mapId) {
-        case "frontier":
-          paintRiver(terrain, W * 0.48, 0);
-          paintRidge(terrain, H * 0.26);
-          break;
-        case "twinrivers":
-          paintRiver(terrain, W * 0.34, 0.25);
-          paintRiver(terrain, W * 0.67, 1.15);
-          break;
-        case "highlands":
-          paintRidge(terrain, H * 0.38);
-          paintRidge(terrain, H * 0.68);
-          break;
-        case "plains":
-          addRoadCross(terrain);
-          break;
-        case "heartland":
-          addRoadCross(terrain);
-          createEllipse(terrain, W * 0.2, H * 0.25, 4, 2, "forest", 0.94);
-          createEllipse(terrain, W * 0.78, H * 0.72, 4, 3, "forest", 0.94);
-          break;
-        case "coast":
-          for (let y = 0; y < H; y++) {
-            const shore = Math.floor(W * 0.22 + Math.sin(y * 0.42) * 2);
-            for (let x = 0; x <= shore; x++) {
-              terrain[y][x] = "water";
-            }
-          }
-          paintRidge(terrain, H * 0.7);
-          break;
-        case "islands":
-          for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-              terrain[y][x] = "water";
-            }
-          }
-          createEllipse(terrain, W * 0.22, H * 0.48, 5, 3, "plain", 0.96);
-          createEllipse(terrain, W * 0.5, H * 0.3, 4, 2, "plain", 0.95);
-          createEllipse(terrain, W * 0.72, H * 0.66, 6, 3, "plain", 0.95);
-          createEllipse(terrain, W * 0.45, H * 0.78, 3, 2, "plain", 0.92);
-          break;
-        case "innersea":
-          createEllipse(terrain, W * 0.5, H * 0.52, W * 0.22, H * 0.3, "water", 0.98);
-          addRoadCross(terrain);
-          break;
-        case "grandbay":
-          createEllipse(terrain, W * 0.14, H * 0.78, W * 0.36, H * 0.42, "water", 0.98);
-          createEllipse(terrain, W * 0.42, H * 0.58, 3, 2, "water", 0.9);
-          break;
-        case "strait":
-          for (let y = 0; y < H; y++) {
-            const seaX = Math.floor(W * 0.5 + Math.sin(y * 0.42) * 1.1);
-            for (let dx = -2; dx <= 2; dx++) {
-              if (inBounds(seaX + dx, y)) {
-                terrain[y][seaX + dx] = "water";
-              }
-            }
-          }
-          createEllipse(terrain, W * 0.48, H * 0.24, 2, 1, "plain", 1);
-          createEllipse(terrain, W * 0.5, H * 0.73, 2, 1, "plain", 1);
-          break;
-        case "archipelago":
-          for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-              terrain[y][x] = "water";
-            }
-          }
-          createEllipse(terrain, W * 0.28, H * 0.34, 5, 3, "plain", 0.96);
-          createEllipse(terrain, W * 0.62, H * 0.25, 4, 2, "plain", 0.94);
-          createEllipse(terrain, W * 0.77, H * 0.62, 6, 3, "plain", 0.95);
-          createEllipse(terrain, W * 0.44, H * 0.72, 5, 2, "plain", 0.93);
-          createEllipse(terrain, W * 0.12, H * 0.74, 3, 2, "plain", 0.92);
-          break;
-        case "random":
-          for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) {
-              const roll = Math.random();
-              terrain[y][x] = roll < complexity.water ? "water" : roll < complexity.water + complexity.mountain ? "mountain" : roll < complexity.water + complexity.mountain + complexity.forest ? "forest" : "plain";
-            }
-          }
-          addRoadCross(terrain);
-          break;
-        default:
-          break;
-      }
-      if (mapId !== "random") {
-        scatter(terrain, "forest", Math.max(2, Math.round(W * H * complexity.forest / 24)), 2, ["plain"]);
-        scatter(terrain, "mountain", Math.max(1, Math.round(W * H * complexity.mountain / 34)), 1, ["plain"]);
-        if (!MAPS[mapId].sea) {
-          scatter(terrain, "water", Math.max(0, Math.round(W * H * complexity.water / 70)), 1, ["plain"]);
-        }
-      }
-      return terrain;
-    }
     function ownerExists(owner) {
       return game.units.some((entry) => entry.owner === owner) || game.sites.some((entry) => entry.owner === owner);
     }
@@ -1025,7 +1038,7 @@
       return typeMeta(unitEntry.type).domain === "sea" ? 1 : TERRAIN[game.terrain[y][x]].cost;
     }
     function passable(unitEntry, x, y) {
-      if (!inBounds(x, y) || getUnit(x, y)) {
+      if (!inBounds2(x, y) || getUnit(x, y)) {
         return false;
       }
       const domain = typeMeta(unitEntry.type).domain;
@@ -1035,7 +1048,7 @@
       return game.terrain[y][x] !== "water" && game.terrain[y][x] !== "mountain";
     }
     function movementNeighbors(unitEntry, currentCost, x, y) {
-      return adjacent8(x, y);
+      return adjacent82(x, y);
     }
     function reachable(unitEntry) {
       const seen = /* @__PURE__ */ new Map([[cellKey(unitEntry.x, unitEntry.y), 0]]);
@@ -1294,7 +1307,7 @@
       return score;
     }
     function autoUnloadAdjacent(transport) {
-      const cells = adjacent8(transport.x, transport.y).filter((cell) => canUnloadTransport(transport, cell.x, cell.y));
+      const cells = adjacent82(transport.x, transport.y).filter((cell) => canUnloadTransport(transport, cell.x, cell.y));
       if (!cells.length) {
         return false;
       }
@@ -1443,7 +1456,7 @@
         if (siteEntry?.kind === "city" && !areAllies(siteEntry.owner, unitEntry.owner)) {
           return true;
         }
-        for (const next of adjacent8(current.x, current.y)) {
+        for (const next of adjacent82(current.x, current.y)) {
           if (!isLandTile(next.x, next.y)) {
             continue;
           }
@@ -1689,7 +1702,7 @@
       unitEntry.hasAttacked = true;
     }
     function engineerBuildCells(unitEntry) {
-      return adjacent8(unitEntry.x, unitEntry.y).filter((cell) => isWaterTile(cell.x, cell.y) && !getUnit(cell.x, cell.y));
+      return adjacent82(unitEntry.x, unitEntry.y).filter((cell) => isWaterTile(cell.x, cell.y) && !getUnit(cell.x, cell.y));
     }
     function canBuildCamp(unitEntry) {
       return !!unitEntry && unitEntry.type === "engineer" && unitEntry.owner === game.side && !unitEntry.acted && isLandTile(unitEntry.x, unitEntry.y) && !getSite(unitEntry.x, unitEntry.y) && game.goldByOwner[unitEntry.owner] >= CAMP_COST && campCount(unitEntry.owner) < MAX_CAMPS_PER_SIDE;
@@ -1750,7 +1763,7 @@
       const activeSite = selectedSite();
       const canMoveNow = activeUnit && !activeUnit.hasAttacked && activeUnit.move > 0;
       const moves = canMoveNow && game.side === "player" ? reachable(activeUnit) : /* @__PURE__ */ new Map();
-      const unloadHints = activeUnit && typeMeta(activeUnit.type).transport && activeUnit.cargo.length ? adjacent8(activeUnit.x, activeUnit.y).filter((cell) => canUnloadTransport(activeUnit, cell.x, cell.y)) : [];
+      const unloadHints = activeUnit && typeMeta(activeUnit.type).transport && activeUnit.cargo.length ? adjacent82(activeUnit.x, activeUnit.y).filter((cell) => canUnloadTransport(activeUnit, cell.x, cell.y)) : [];
       const engineerHints = game.pendingOrder?.kind === "engineer-launch" && activeUnit?.id === game.pendingOrder.builderId ? engineerBuildCells(activeUnit) : [];
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
@@ -2062,7 +2075,7 @@
         return;
       }
       const cell = tileFromEvent(event);
-      if (!inBounds(cell.x, cell.y)) {
+      if (!inBounds2(cell.x, cell.y)) {
         return;
       }
       const targetUnit = getUnit(cell.x, cell.y);
@@ -2394,7 +2407,7 @@
       if (!siteEntry) {
         return false;
       }
-      const passableNeighbors = adjacent4(siteEntry.x, siteEntry.y).filter((cell) => {
+      const passableNeighbors = adjacent42(siteEntry.x, siteEntry.y).filter((cell) => {
         if (game.terrain[siteEntry.y][siteEntry.x] === "water") {
           return isWaterTile(cell.x, cell.y);
         }
@@ -2611,7 +2624,7 @@
       };
     }
     function strategicPassable(unitEntry, x, y) {
-      if (!inBounds(x, y)) {
+      if (!inBounds2(x, y)) {
         return false;
       }
       const domain = typeMeta(unitEntry.type).domain;
@@ -2640,7 +2653,7 @@
       while (head < queue.length) {
         const current = queue[head++];
         const nextCost = current.cost + 1;
-        for (const next of adjacent8(current.x, current.y)) {
+        for (const next of adjacent82(current.x, current.y)) {
           if (!strategicPassable(unitEntry, next.x, next.y)) {
             continue;
           }
@@ -2681,7 +2694,7 @@
     function unitRoleCellBonus(owner, unitEntry, cell, intent) {
       const type = unitEntry.type;
       const siteEntry = getSite(cell.x, cell.y);
-      const coastal = adjacent8(cell.x, cell.y).some((next) => isWaterTile(next.x, next.y));
+      const coastal = adjacent82(cell.x, cell.y).some((next) => isWaterTile(next.x, next.y));
       let score = 0;
       if (type === "scout") {
         score += cityEconomyValue(siteEntry || { kind: "none", owner }, owner) * 0.35;
@@ -2937,7 +2950,7 @@
       const cells = [];
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
-          if (isLandTile(x, y) && adjacent8(x, y).some((cell) => isWaterTile(cell.x, cell.y))) {
+          if (isLandTile(x, y) && adjacent82(x, y).some((cell) => isWaterTile(cell.x, cell.y))) {
             cells.push({ x, y, score: strategicLandingScore(owner, { x, y }) });
           }
         }
@@ -3317,7 +3330,7 @@
       currentSaveKey = null;
       distFieldCache.clear();
       game = {
-        terrain: terrainFor($("mapSelect").value, $("complexitySelect").value),
+        terrain: terrainFor($("mapSelect").value, $("complexitySelect").value, W, H),
         units: [],
         sites: [],
         ownerOrder: owners,
@@ -3709,7 +3722,7 @@
       const dims = computeDimensions($("sizeSelect").value, $("aspectSelect").value);
       W = dims.w;
       H = dims.h;
-      const terrain = terrainFor($("mapSelect").value, $("complexitySelect").value);
+      const terrain = terrainFor($("mapSelect").value, $("complexitySelect").value, W, H);
       const pctx = pv.getContext("2d");
       pctx.clearRect(0, 0, pv.width, pv.height);
       const sx = pv.width / W;
