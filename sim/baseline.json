@@ -1,0 +1,1692 @@
+{
+  "meta": {
+    "ts": "2026-08-09T09:55:31.706Z",
+    "node": "v24.18.1",
+    "bundleBytes": 191710,
+    "elapsedSec": 118,
+    "scenarioIds": [
+      "coast-3ai",
+      "diff-gap",
+      "heartland-2ai",
+      "scripted-bridgehead",
+      "scripted-naval",
+      "strait-2ai"
+    ]
+  },
+  "scenarios": {
+    "strait-2ai": {
+      "desc": "裂海海峡 · 2AI 冷酷/均衡 —— 覆盖海战、运输、登陆、桥头堡",
+      "cap": 120,
+      "rounds": 5,
+      "bySeed": {
+        "seed777": {
+          "wins": {
+            "B": 2,
+            "C": 3
+          },
+          "avgTurns": 121,
+          "totals": {
+            "campsBuilt": 17,
+            "cityCaptures": 15.6,
+            "engineerLandings": 51.8,
+            "oilCaptures": 4.2,
+            "reroutes": 137.6,
+            "reserves": 0,
+            "retreats": 5.6,
+            "sells": 21,
+            "shipyardCaptures": 4,
+            "stalls": 1022.2,
+            "transportLaunches": 14.8
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 5 城 / 14 据点领先胜出。",
+              "unitsAlive": 104,
+              "cityOwners": {
+                "B": 5,
+                "C": 5
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 9,
+                  "engineerLandings": 2,
+                  "oilCaptures": 2,
+                  "reroutes": 15,
+                  "reserves": 0,
+                  "retreats": 3,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 50,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 50,
+                  "cityCaptures": 9,
+                  "engineerLandings": 106,
+                  "oilCaptures": 3,
+                  "reroutes": 109,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 2,
+                  "shipyardCaptures": 3,
+                  "stalls": 664,
+                  "transportLaunches": 34
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 6 城 / 9 据点领先胜出。",
+              "unitsAlive": 217,
+              "cityOwners": {
+                "B": 4,
+                "C": 6
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 3,
+                  "engineerLandings": 9,
+                  "oilCaptures": 2,
+                  "reroutes": 70,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 20,
+                  "shipyardCaptures": 5,
+                  "stalls": 590,
+                  "transportLaunches": 1
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 2,
+                  "oilCaptures": 1,
+                  "reroutes": 98,
+                  "reserves": 0,
+                  "retreats": 8,
+                  "sells": 15,
+                  "shipyardCaptures": 4,
+                  "stalls": 883,
+                  "transportLaunches": 1
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 6 城 / 9 据点领先胜出。",
+              "unitsAlive": 39,
+              "cityOwners": {
+                "A": 1,
+                "C": 6,
+                "neutral": 3
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 3,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 50,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 146,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 7,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 14,
+                  "reserves": 0,
+                  "retreats": 7,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 35,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 6 城 / 13 据点领先胜出。",
+              "unitsAlive": 84,
+              "cityOwners": {
+                "B": 4,
+                "C": 6
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 12,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 4,
+                  "reserves": 0,
+                  "retreats": 1,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 20,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 33,
+                  "cityCaptures": 13,
+                  "engineerLandings": 122,
+                  "oilCaptures": 2,
+                  "reroutes": 113,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 840,
+                  "transportLaunches": 30
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 7 城 / 11 据点领先胜出。",
+              "unitsAlive": 238,
+              "cityOwners": {
+                "B": 7,
+                "C": 3
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 10,
+                  "engineerLandings": 16,
+                  "oilCaptures": 2,
+                  "reroutes": 110,
+                  "reserves": 0,
+                  "retreats": 9,
+                  "sells": 48,
+                  "shipyardCaptures": 1,
+                  "stalls": 692,
+                  "transportLaunches": 6
+                },
+                "ai1": {
+                  "campsBuilt": 2,
+                  "cityCaptures": 7,
+                  "engineerLandings": 2,
+                  "oilCaptures": 1,
+                  "reroutes": 105,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 20,
+                  "shipyardCaptures": 1,
+                  "stalls": 1191,
+                  "transportLaunches": 2
+                }
+              }
+            }
+          ]
+        },
+        "seed20260804": {
+          "wins": {
+            "B": 3,
+            "C": 2
+          },
+          "avgTurns": 113.4,
+          "totals": {
+            "campsBuilt": 1.6,
+            "cityCaptures": 8.6,
+            "engineerLandings": 27.6,
+            "oilCaptures": 3.4,
+            "reroutes": 150.2,
+            "reserves": 0,
+            "retreats": 10,
+            "sells": 29,
+            "shipyardCaptures": 4,
+            "stalls": 1179.2,
+            "transportLaunches": 8.8
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 6 城 / 10 据点领先胜出。",
+              "unitsAlive": 218,
+              "cityOwners": {
+                "B": 6,
+                "C": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 8,
+                  "oilCaptures": 1,
+                  "reroutes": 104,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 16,
+                  "shipyardCaptures": 2,
+                  "stalls": 857,
+                  "transportLaunches": 2
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 3,
+                  "engineerLandings": 50,
+                  "oilCaptures": 2,
+                  "reroutes": 108,
+                  "reserves": 0,
+                  "retreats": 15,
+                  "sells": 23,
+                  "shipyardCaptures": 1,
+                  "stalls": 742,
+                  "transportLaunches": 9
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 5 城 / 10 据点领先胜出。",
+              "unitsAlive": 191,
+              "cityOwners": {
+                "B": 5,
+                "C": 5
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 7,
+                  "cityCaptures": 6,
+                  "engineerLandings": 53,
+                  "oilCaptures": 1,
+                  "reroutes": 112,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 16,
+                  "shipyardCaptures": 3,
+                  "stalls": 681,
+                  "transportLaunches": 11
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 6,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 66,
+                  "reserves": 0,
+                  "retreats": 13,
+                  "sells": 13,
+                  "shipyardCaptures": 1,
+                  "stalls": 642,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 5 城 / 7 据点领先胜出。",
+              "unitsAlive": 39,
+              "cityOwners": {
+                "A": 1,
+                "C": 5,
+                "neutral": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 3,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 80,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 514,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 6,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 4,
+                  "reserves": 0,
+                  "retreats": 3,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 50,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 6 城 / 9 据点领先胜出。",
+              "unitsAlive": 253,
+              "cityOwners": {
+                "B": 6,
+                "C": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 1,
+                  "cityCaptures": 5,
+                  "engineerLandings": 3,
+                  "oilCaptures": 2,
+                  "reroutes": 106,
+                  "reserves": 0,
+                  "retreats": 14,
+                  "sells": 30,
+                  "shipyardCaptures": 4,
+                  "stalls": 834,
+                  "transportLaunches": 6
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 3,
+                  "engineerLandings": 11,
+                  "oilCaptures": 1,
+                  "reroutes": 104,
+                  "reserves": 0,
+                  "retreats": 5,
+                  "sells": 25,
+                  "shipyardCaptures": 5,
+                  "stalls": 1059,
+                  "transportLaunches": 5
+                }
+              }
+            },
+            {
+              "turn": 83,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 138,
+              "cityOwners": {
+                "B": 6,
+                "neutral": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 13,
+                  "oilCaptures": 2,
+                  "reroutes": 67,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 22,
+                  "shipyardCaptures": 2,
+                  "stalls": 517,
+                  "transportLaunches": 11
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 1,
+                  "engineerLandings": 0,
+                  "oilCaptures": 1,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "heartland-2ai": {
+      "desc": "中心平原 · 2AI 冷酷/均衡 —— 覆盖纯陆战、距离场寻路、据点争夺",
+      "cap": 120,
+      "rounds": 5,
+      "bySeed": {
+        "seed777": {
+          "wins": {
+            "B": 1,
+            "C": 4
+          },
+          "avgTurns": 103,
+          "totals": {
+            "campsBuilt": 2.4,
+            "cityCaptures": 16.8,
+            "engineerLandings": 9.4,
+            "oilCaptures": 11.6,
+            "reroutes": 73.6,
+            "reserves": 0,
+            "retreats": 124,
+            "sells": 28.2,
+            "shipyardCaptures": 1.4,
+            "stalls": 216.4,
+            "transportLaunches": 0
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 10 城 / 17 据点领先胜出。",
+              "unitsAlive": 141,
+              "cityOwners": {
+                "C": 10
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 4,
+                  "engineerLandings": 2,
+                  "oilCaptures": 2,
+                  "reroutes": 4,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 8,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 9,
+                  "engineerLandings": 0,
+                  "oilCaptures": 4,
+                  "reroutes": 95,
+                  "reserves": 0,
+                  "retreats": 134,
+                  "sells": 63,
+                  "shipyardCaptures": 0,
+                  "stalls": 195,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 31,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 43,
+              "cityOwners": {
+                "B": 10
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 2,
+                  "cityCaptures": 15,
+                  "engineerLandings": 0,
+                  "oilCaptures": 7,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 10,
+                  "engineerLandings": 0,
+                  "oilCaptures": 5,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 10 城 / 16 据点领先胜出。",
+              "unitsAlive": 138,
+              "cityOwners": {
+                "C": 10
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 7,
+                  "engineerLandings": 27,
+                  "oilCaptures": 5,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 6,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 13,
+                  "engineerLandings": 0,
+                  "oilCaptures": 6,
+                  "reroutes": 91,
+                  "reserves": 0,
+                  "retreats": 158,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 453,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 10 城 / 17 据点领先胜出。",
+              "unitsAlive": 138,
+              "cityOwners": {
+                "C": 10
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 1,
+                  "engineerLandings": 1,
+                  "oilCaptures": 1,
+                  "reroutes": 2,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 1,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 9,
+                  "engineerLandings": 0,
+                  "oilCaptures": 4,
+                  "reroutes": 97,
+                  "reserves": 0,
+                  "retreats": 139,
+                  "sells": 49,
+                  "shipyardCaptures": 0,
+                  "stalls": 193,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 10 城 / 17 据点领先胜出。",
+              "unitsAlive": 138,
+              "cityOwners": {
+                "C": 10
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 10,
+                  "cityCaptures": 5,
+                  "engineerLandings": 17,
+                  "oilCaptures": 11,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 3,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 11,
+                  "engineerLandings": 0,
+                  "oilCaptures": 13,
+                  "reroutes": 79,
+                  "reserves": 0,
+                  "retreats": 189,
+                  "sells": 29,
+                  "shipyardCaptures": 1,
+                  "stalls": 226,
+                  "transportLaunches": 0
+                }
+              }
+            }
+          ]
+        },
+        "seed20260804": {
+          "wins": {
+            "B": 2,
+            "C": 3
+          },
+          "avgTurns": 42,
+          "totals": {
+            "campsBuilt": 0.2,
+            "cityCaptures": 13.2,
+            "engineerLandings": 0.6,
+            "oilCaptures": 10.6,
+            "reroutes": 19,
+            "reserves": 0,
+            "retreats": 32.2,
+            "sells": 5.2,
+            "shipyardCaptures": 0.8,
+            "stalls": 59.4,
+            "transportLaunches": 0
+          },
+          "runs": [
+            {
+              "turn": 13,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 19,
+              "cityOwners": {
+                "B": 8,
+                "neutral": 2
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 7,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 2,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 4,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 9,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 10 城 / 17 据点领先胜出。",
+              "unitsAlive": 139,
+              "cityOwners": {
+                "C": 10
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 3,
+                  "oilCaptures": 4,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 3,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 9,
+                  "engineerLandings": 0,
+                  "oilCaptures": 5,
+                  "reroutes": 91,
+                  "reserves": 0,
+                  "retreats": 161,
+                  "sells": 26,
+                  "shipyardCaptures": 1,
+                  "stalls": 288,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 25,
+              "over": true,
+              "win": true,
+              "resultText": "C 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 36,
+              "cityOwners": {
+                "C": 9,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 1,
+                  "cityCaptures": 5,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 12,
+                  "engineerLandings": 0,
+                  "oilCaptures": 5,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 13,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 24,
+              "cityOwners": {
+                "B": 6,
+                "neutral": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 0,
+                  "oilCaptures": 4,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 2,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 38,
+              "over": true,
+              "win": true,
+              "resultText": "C 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 31,
+              "cityOwners": {
+                "C": 9,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 7,
+                  "engineerLandings": 0,
+                  "oilCaptures": 13,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 12,
+                  "engineerLandings": 0,
+                  "oilCaptures": 14,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "coast-3ai": {
+      "desc": "海岸丘陵 · 3AI 混战 —— 覆盖多阵营交互、盟友判定、拥挤度",
+      "cap": 120,
+      "rounds": 4,
+      "bySeed": {
+        "seed4242": {
+          "wins": {
+            "B": 3,
+            "C": 1
+          },
+          "avgTurns": 121,
+          "totals": {
+            "campsBuilt": 5.5,
+            "cityCaptures": 25.3,
+            "engineerLandings": 0,
+            "oilCaptures": 7,
+            "reroutes": 135.8,
+            "reserves": 0,
+            "retreats": 29.8,
+            "sells": 16.3,
+            "shipyardCaptures": 1.3,
+            "stalls": 862,
+            "transportLaunches": 0
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 7 城 / 9 据点领先胜出。",
+              "unitsAlive": 132,
+              "cityOwners": {
+                "B": 7,
+                "C": 3,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 21,
+                  "cityCaptures": 10,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 98,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 29,
+                  "shipyardCaptures": 0,
+                  "stalls": 824,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 1,
+                  "cityCaptures": 7,
+                  "engineerLandings": 0,
+                  "oilCaptures": 1,
+                  "reroutes": 100,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 24,
+                  "shipyardCaptures": 0,
+                  "stalls": 1091,
+                  "transportLaunches": 0
+                },
+                "ai2": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 71,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 341,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 10 城 / 14 据点领先胜出。",
+              "unitsAlive": 58,
+              "cityOwners": {
+                "B": 10,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 11,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 99,
+                  "reserves": 0,
+                  "retreats": 8,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 426,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 3,
+                  "engineerLandings": 0,
+                  "oilCaptures": 1,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                },
+                "ai2": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 7,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 1,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 10 城 / 14 据点领先胜出。",
+              "unitsAlive": 75,
+              "cityOwners": {
+                "C": 10,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 6,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 3,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 15,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 69,
+                  "reserves": 0,
+                  "retreats": 26,
+                  "sells": 5,
+                  "shipyardCaptures": 0,
+                  "stalls": 316,
+                  "transportLaunches": 0
+                },
+                "ai2": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 8,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 5,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 10 城 / 15 据点领先胜出。",
+              "unitsAlive": 78,
+              "cityOwners": {
+                "B": 10,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 17,
+                  "engineerLandings": 0,
+                  "oilCaptures": 4,
+                  "reroutes": 102,
+                  "reserves": 0,
+                  "retreats": 85,
+                  "sells": 7,
+                  "shipyardCaptures": 0,
+                  "stalls": 434,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 4,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 3,
+                  "transportLaunches": 0
+                },
+                "ai2": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 13,
+                  "engineerLandings": 0,
+                  "oilCaptures": 4,
+                  "reroutes": 3,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 5,
+                  "transportLaunches": 0
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "diff-gap": {
+      "desc": "裂海海峡 · 冷酷冲动 vs 简单谨慎 —— 覆盖难度分支与经济/建造决策差异",
+      "cap": 120,
+      "rounds": 4,
+      "bySeed": {
+        "seed4242": {
+          "wins": {
+            "B": 3,
+            "C": 1
+          },
+          "avgTurns": 96.3,
+          "totals": {
+            "campsBuilt": 25.3,
+            "cityCaptures": 12.8,
+            "engineerLandings": 107.3,
+            "oilCaptures": 3.3,
+            "reroutes": 115.8,
+            "reserves": 17.3,
+            "retreats": 0.8,
+            "sells": 6.5,
+            "shipyardCaptures": 3.5,
+            "stalls": 818.8,
+            "transportLaunches": 22
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 5 城 / 10 据点领先胜出。",
+              "unitsAlive": 41,
+              "cityOwners": {
+                "A": 1,
+                "B": 5,
+                "neutral": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 43,
+                  "oilCaptures": 3,
+                  "reroutes": 96,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 4,
+                  "stalls": 733,
+                  "transportLaunches": 1
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 2,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 3,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 22,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 55,
+              "cityOwners": {
+                "B": 7,
+                "neutral": 3
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 6,
+                  "engineerLandings": 1,
+                  "oilCaptures": 2,
+                  "reroutes": 10,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 63,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 1,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 2,
+                  "reserves": 1,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 3,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 C 组以 5 城 / 11 据点领先胜出。",
+              "unitsAlive": 174,
+              "cityOwners": {
+                "B": 5,
+                "C": 5
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 10,
+                  "engineerLandings": 3,
+                  "oilCaptures": 1,
+                  "reroutes": 84,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 16,
+                  "shipyardCaptures": 0,
+                  "stalls": 753,
+                  "transportLaunches": 7
+                },
+                "ai1": {
+                  "campsBuilt": 55,
+                  "cityCaptures": 10,
+                  "engineerLandings": 164,
+                  "oilCaptures": 2,
+                  "reroutes": 97,
+                  "reserves": 66,
+                  "retreats": 3,
+                  "sells": 5,
+                  "shipyardCaptures": 2,
+                  "stalls": 635,
+                  "transportLaunches": 31
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 6 城 / 8 据点领先胜出。",
+              "unitsAlive": 182,
+              "cityOwners": {
+                "B": 6,
+                "C": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 9,
+                  "engineerLandings": 0,
+                  "oilCaptures": 1,
+                  "reroutes": 76,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 4,
+                  "shipyardCaptures": 0,
+                  "stalls": 581,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 46,
+                  "cityCaptures": 8,
+                  "engineerLandings": 218,
+                  "oilCaptures": 2,
+                  "reroutes": 98,
+                  "reserves": 2,
+                  "retreats": 0,
+                  "sells": 1,
+                  "shipyardCaptures": 2,
+                  "stalls": 507,
+                  "transportLaunches": 49
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "scripted-bridgehead": {
+      "desc": "裂海海峡 · 冷酷 vs 桥头脚本对手 —— 定向覆盖 bridgehead* 系列登陆逻辑",
+      "cap": 120,
+      "rounds": 4,
+      "bySeed": {
+        "seed4242": {
+          "wins": {
+            "B": 4
+          },
+          "avgTurns": 75.5,
+          "totals": {
+            "campsBuilt": 0.5,
+            "cityCaptures": 5.8,
+            "engineerLandings": 2.5,
+            "oilCaptures": 2.3,
+            "reroutes": 54,
+            "reserves": 0,
+            "retreats": 4,
+            "sells": 4.5,
+            "shipyardCaptures": 1.5,
+            "stalls": 479.3,
+            "transportLaunches": 1.3
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 5 城 / 10 据点领先胜出。",
+              "unitsAlive": 26,
+              "cityOwners": {
+                "A": 1,
+                "B": 5,
+                "neutral": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 2,
+                  "cityCaptures": 6,
+                  "engineerLandings": 0,
+                  "oilCaptures": 3,
+                  "reroutes": 79,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 2,
+                  "stalls": 508,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 2,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 22,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 55,
+              "cityOwners": {
+                "B": 6,
+                "neutral": 4
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 5,
+                  "engineerLandings": 3,
+                  "oilCaptures": 2,
+                  "reroutes": 8,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 45,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 5 城 / 7 据点领先胜出。",
+              "unitsAlive": 156,
+              "cityOwners": {
+                "A": 1,
+                "B": 5,
+                "C": 1,
+                "neutral": 3
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 4,
+                  "engineerLandings": 2,
+                  "oilCaptures": 1,
+                  "reroutes": 101,
+                  "reserves": 0,
+                  "retreats": 16,
+                  "sells": 17,
+                  "shipyardCaptures": 0,
+                  "stalls": 1139,
+                  "transportLaunches": 2
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 38,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 58,
+              "cityOwners": {
+                "B": 7,
+                "neutral": 3
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 6,
+                  "engineerLandings": 5,
+                  "oilCaptures": 1,
+                  "reroutes": 28,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 1,
+                  "shipyardCaptures": 2,
+                  "stalls": 225,
+                  "transportLaunches": 3
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "scripted-naval": {
+      "desc": "海湾登陆 · 冷酷 vs 海防脚本对手 —— 定向覆盖 naval* 系列制海与巡逻逻辑",
+      "cap": 120,
+      "rounds": 4,
+      "bySeed": {
+        "seed4242": {
+          "wins": {
+            "B": 4
+          },
+          "avgTurns": 97,
+          "totals": {
+            "campsBuilt": 0.3,
+            "cityCaptures": 7.5,
+            "engineerLandings": 5.3,
+            "oilCaptures": 2.8,
+            "reroutes": 67.8,
+            "reserves": 0,
+            "retreats": 22.8,
+            "sells": 8.3,
+            "shipyardCaptures": 1.8,
+            "stalls": 225.3,
+            "transportLaunches": 5.8
+          },
+          "runs": [
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 9 城 / 15 据点领先胜出。",
+              "unitsAlive": 116,
+              "cityOwners": {
+                "B": 9,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 8,
+                  "engineerLandings": 1,
+                  "oilCaptures": 3,
+                  "reroutes": 95,
+                  "reserves": 0,
+                  "retreats": 4,
+                  "sells": 8,
+                  "shipyardCaptures": 1,
+                  "stalls": 260,
+                  "transportLaunches": 9
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 1,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 9 城 / 14 据点领先胜出。",
+              "unitsAlive": 106,
+              "cityOwners": {
+                "B": 9,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 8,
+                  "engineerLandings": 6,
+                  "oilCaptures": 3,
+                  "reroutes": 100,
+                  "reserves": 0,
+                  "retreats": 79,
+                  "sells": 16,
+                  "shipyardCaptures": 0,
+                  "stalls": 395,
+                  "transportLaunches": 8
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 25,
+              "over": true,
+              "win": true,
+              "resultText": "B 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。",
+              "unitsAlive": 48,
+              "cityOwners": {
+                "B": 8,
+                "neutral": 2
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 1,
+                  "cityCaptures": 7,
+                  "engineerLandings": 0,
+                  "oilCaptures": 2,
+                  "reroutes": 8,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 3,
+                  "stalls": 11,
+                  "transportLaunches": 0
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            },
+            {
+              "turn": 121,
+              "over": true,
+              "win": false,
+              "resultText": "战局在第 121 回合达到回合上限，判定 B 组以 8 城 / 16 据点领先胜出。",
+              "unitsAlive": 122,
+              "cityOwners": {
+                "A": 1,
+                "B": 8,
+                "neutral": 1
+              },
+              "byOwner": {
+                "ai0": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 7,
+                  "engineerLandings": 14,
+                  "oilCaptures": 3,
+                  "reroutes": 68,
+                  "reserves": 0,
+                  "retreats": 8,
+                  "sells": 9,
+                  "shipyardCaptures": 2,
+                  "stalls": 235,
+                  "transportLaunches": 6
+                },
+                "ai1": {
+                  "campsBuilt": 0,
+                  "cityCaptures": 0,
+                  "engineerLandings": 0,
+                  "oilCaptures": 0,
+                  "reroutes": 0,
+                  "reserves": 0,
+                  "retreats": 0,
+                  "sells": 0,
+                  "shipyardCaptures": 0,
+                  "stalls": 0,
+                  "transportLaunches": 0
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,69 @@
+# 模拟器与回归工具
+
+无浏览器跑游戏本体。所有工具都 `eval` 打包产物 `js/game.js`（不是 `src/`），
+所以**跑之前必须先 `node build.js`** —— `npm run snap` / `npm run verify` 已经
+自动串好了构建，手动调用 `sim/*.js` 时要自己注意。
+
+## 三套工具的分工
+
+| 命令 | 用途 | 断言强度 |
+|---|---|---|
+| `npm run sim` | 手工探查：跑几局看指标，调参时的即时反馈 | 无断言，只出数据 |
+| `npm run sim:suite` | 防**平衡漂移**：胜率是否还在合理区间 | 宽区间（如 25%~75%） |
+| `npm run verify` | 防**重构搬错**：行为是否与基线逐字段全等 | 零容忍，一个数字都不能变 |
+
+`verify` 能成立，是因为 `fastBatch()` 会把 `Math.random` 换成种子化 LCG 再跑、
+跑完还原（见 `src/main.js` 的 `makeRng`）。因此同一组 `(config, seed, rounds, cap)`
+必然产出逐字节相同的结果 —— 这就是纯结构重构所需要的行为等价性证明。
+
+## 标准工作流
+
+拆模块 / 搬函数 / 改导入这类**不该改变行为**的改动：
+
+```bash
+npm run verify          # 动手前先确认是绿的
+# ... 拆一个模块 ...
+npm run verify          # 全量约 2 分钟
+git commit              # 绿了才提交，红了就回查
+```
+
+定位问题时只跑单个场景会快很多（约 30 秒）：
+
+```bash
+npm run verify -- only=strait-2ai
+npm run verify -- only=strait-2ai max=100    # 多打印几条差异
+```
+
+差异路径形如 `strait-2ai/bySeed/seed777/runs[0]/byOwner/ai1/cityCaptures`，
+可以直接定位到「哪个场景 / 哪个种子 / 第几局 / 哪个 AI / 哪个指标」。
+
+## ⚠️ 一条铁律
+
+**`verify` 变红时，不要习惯性地跑 `npm run snap` 把基线覆盖掉。**
+
+- 如果这次改动**本就打算**改变行为（调数值、换算法、修 bug、加兵种/地形）：
+  先逐条看差异是否符合预期，确认后再 `npm run snap` 更新基线，并在提交信息里
+  写明「基线已更新，原因是 ___」。
+- 如果这次改动**应该是**纯结构重构：那就是搬错了，去改代码，不要动基线。
+
+基线一旦被无脑覆盖，这张安全网就废了。
+
+## 场景矩阵
+
+定义在 `sim/scenarios.js`，共 6 个场景 36 局，覆盖：
+
+- `strait-2ai` / `heartland-2ai` —— 海战（运输、登陆、桥头堡）与纯陆战（距离场寻路）
+- `coast-3ai` —— 多阵营交互、盟友判定、拥挤度
+- `diff-gap` —— 难度与性格分支（冷酷冲动 vs 简单谨慎）
+- `scripted-bridgehead` / `scripted-naval` —— 定向覆盖 `bridgehead*` / `naval*`
+  两套脚本对手逻辑（对应 `DIFF` 里的 `bridgehead` / `naval` 测试难度）
+
+增删场景后需要重新 `npm run snap`。改动场景的 `seeds` / `rounds` / `cap`
+同样会让基线失效 —— 这几个字段应当视为基线的一部分，非必要不要动。
+
+## 产物文件
+
+| 文件 | 是否入库 |
+|---|---|
+| `sim/baseline.json` | ✅ **必须入库**，它就是基线本身 |
+| `sim/last-result.json`、`sim/last-diag.json`、`sim/suite-result.json` | ❌ 运行产物，已在 `.gitignore` |

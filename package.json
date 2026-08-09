@@ -8,7 +8,9 @@
     "build:min": "node build.js --minify",
     "watch": "node build.js --watch",
     "sim": "node sim/run.js",
-    "sim:suite": "node sim/suite.js"
+    "sim:suite": "node sim/suite.js",
+    "snap": "node build.js && node sim/snapshot.js",
+    "verify": "node build.js && node sim/verify.js"
   },
   "devDependencies": {
     "esbuild": "^0.23.1"

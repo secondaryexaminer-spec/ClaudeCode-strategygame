@@ -5,8 +5,10 @@ node_modules/
 saves/*
 !saves/README.txt
 
-# 运行/诊断产物
+# 运行/诊断产物（注意：sim/baseline.json 是重构基线，必须入库，不要忽略）
 sim/last-diag.json
+sim/last-result.json
+sim/suite-result.json
 
 # 编辑器与系统文件
 .vscode/
