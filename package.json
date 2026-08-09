@@ -1,0 +1,16 @@
+{
+  "name": "frontier-commander",
+  "version": "0.1.2",
+  "private": true,
+  "description": "边境指挥官 · Frontier Commander — 回合制陆海联合作战",
+  "scripts": {
+    "build": "node build.js",
+    "build:min": "node build.js --minify",
+    "watch": "node build.js --watch",
+    "sim": "node sim/run.js",
+    "sim:suite": "node sim/suite.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.1"
+  }
+}

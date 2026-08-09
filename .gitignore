@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+
+# 玩家存档（保留文件夹说明）
+saves/*
+!saves/README.txt
+
+# 运行/诊断产物
+sim/last-diag.json
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# 注意：js/game.js 是 src/ 的 esbuild 打包产物，但 index.html 需要它才能
+# 直接用 file:// 打开（也便于 GitHub Pages 部署），因此故意纳入版本管理。
