@@ -626,6 +626,95 @@
     };
   }
 
+  // src/game/entities.js
+  function randomId() {
+    return Math.random().toString(36).slice(2);
+  }
+  function unit(type, owner, x, y) {
+    const meta = typeMeta(type);
+    return {
+      id: randomId(),
+      type,
+      owner,
+      x,
+      y,
+      hp: meta.hp,
+      maxHp: meta.hp,
+      move: meta.move,
+      maxMove: meta.move,
+      baseMove: meta.move,
+      acted: false,
+      hasAttacked: false,
+      lastAttacked: false,
+      kills: 0,
+      rank: 0,
+      cargo: meta.transport ? [] : null
+    };
+  }
+  function createCargoPayload(owner, type) {
+    return {
+      type,
+      owner,
+      hp: typeMeta(type).hp,
+      maxHp: typeMeta(type).hp,
+      lastAttacked: false
+    };
+  }
+  function createLoadedTransport(owner, x, y, cargoTypes = []) {
+    const transport = unit("transport", owner, x, y);
+    transport.cargo = normalizeCargoTypes(cargoTypes).map((type) => createCargoPayload(owner, type));
+    return transport;
+  }
+  function site(kind, owner, x, y, name, tier = 1, income = null) {
+    return {
+      id: randomId(),
+      kind,
+      owner,
+      x,
+      y,
+      name,
+      tier,
+      income: income == null ? siteMeta(kind).income : income
+    };
+  }
+  function createCamp(owner, x, y) {
+    const camp = site("camp", owner, x, y, "临时营地", 2, 0);
+    camp.duration = CAMP_DURATION;
+    camp.uncapturable = true;
+    return camp;
+  }
+  function cargoOptionTypes() {
+    return Object.keys(TYPES).filter((type) => typeMeta(type).domain === "land");
+  }
+  function normalizeCargoTypes(types) {
+    return (types || []).filter((type) => type && type !== "none" && TYPES[type] && typeMeta(type).domain === "land").slice(0, typeMeta("transport").transport);
+  }
+  function transportCost(cargoTypes = []) {
+    return typeMeta("transport").cost + normalizeCargoTypes(cargoTypes).reduce((sum, type) => sum + typeMeta(type).cost, 0);
+  }
+  function cargoLabel(type) {
+    return type === "none" ? "空位" : `${typeMeta(type).icon} ${typeMeta(type).name}`;
+  }
+  function describeCargo(cargoTypes = []) {
+    const types = normalizeCargoTypes(cargoTypes);
+    return types.length ? types.map((type) => typeMeta(type).name).join("、") : "空舱";
+  }
+  function rankFromKills(kills) {
+    let rank = 0;
+    for (let index = 0; index < UNIT_RANK_THRESHOLDS.length; index++) {
+      if (kills >= UNIT_RANK_THRESHOLDS[index]) {
+        rank = index;
+      }
+    }
+    return rank;
+  }
+  function effectiveMove(unitEntry) {
+    return unitEntry.baseMove + Math.floor(unitEntry.rank / 2);
+  }
+  function healMultiplier(unitEntry) {
+    return 1 + unitEntry.rank * 0.15;
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -1052,9 +1141,6 @@
     function domainName(domain) {
       return domain === "sea" ? "海军" : "陆军";
     }
-    function randomId() {
-      return Math.random().toString(36).slice(2);
-    }
     function computeDimensions(sizeKey, aspectKey) {
       const base = SIZES[sizeKey];
       const ratio = ASPECTS[aspectKey].ratio;
@@ -1068,59 +1154,6 @@
         [width, height] = [height, width];
       }
       return { w: width, h: height };
-    }
-    function unit(type, owner, x, y) {
-      const meta = typeMeta(type);
-      return {
-        id: randomId(),
-        type,
-        owner,
-        x,
-        y,
-        hp: meta.hp,
-        maxHp: meta.hp,
-        move: meta.move,
-        maxMove: meta.move,
-        baseMove: meta.move,
-        acted: false,
-        hasAttacked: false,
-        lastAttacked: false,
-        kills: 0,
-        rank: 0,
-        cargo: meta.transport ? [] : null
-      };
-    }
-    function createCargoPayload(owner, type) {
-      return {
-        type,
-        owner,
-        hp: typeMeta(type).hp,
-        maxHp: typeMeta(type).hp,
-        lastAttacked: false
-      };
-    }
-    function createLoadedTransport(owner, x, y, cargoTypes = []) {
-      const transport = unit("transport", owner, x, y);
-      transport.cargo = normalizeCargoTypes(cargoTypes).map((type) => createCargoPayload(owner, type));
-      return transport;
-    }
-    function site(kind, owner, x, y, name, tier = 1, income = null) {
-      return {
-        id: randomId(),
-        kind,
-        owner,
-        x,
-        y,
-        name,
-        tier,
-        income: income == null ? siteMeta(kind).income : income
-      };
-    }
-    function createCamp(owner, x, y) {
-      const camp = site("camp", owner, x, y, "临时营地", 2, 0);
-      camp.duration = CAMP_DURATION;
-      camp.uncapturable = true;
-      return camp;
     }
     function getUnit(x, y) {
       return game.units.find((entry) => entry.x === x && entry.y === y);
@@ -1225,29 +1258,8 @@
       const seaRatio = ownedUnitCount(owner, "sea") / Math.max(1, unitCapFor("sea"));
       return Math.max(landRatio, seaRatio);
     }
-    function cargoOptionTypes() {
-      return Object.keys(TYPES).filter((type) => typeMeta(type).domain === "land");
-    }
-    function normalizeCargoTypes(types) {
-      return (types || []).filter((type) => type && type !== "none" && TYPES[type] && typeMeta(type).domain === "land").slice(0, typeMeta("transport").transport);
-    }
     function sameCell(a, b) {
       return !!a && !!b && a.x === b.x && a.y === b.y;
-    }
-    function rankFromKills(kills) {
-      let rank = 0;
-      for (let index = 0; index < UNIT_RANK_THRESHOLDS.length; index++) {
-        if (kills >= UNIT_RANK_THRESHOLDS[index]) {
-          rank = index;
-        }
-      }
-      return rank;
-    }
-    function effectiveMove(unitEntry) {
-      return unitEntry.baseMove + Math.floor(unitEntry.rank / 2);
-    }
-    function healMultiplier(unitEntry) {
-      return 1 + unitEntry.rank * 0.15;
     }
     function grantKills(unitEntry, kills) {
       if (!unitEntry) {
@@ -1261,16 +1273,6 @@
         unitEntry.move = Math.max(unitEntry.move, Math.min(unitEntry.maxMove, unitEntry.move + 1));
         log(`${ownerName(unitEntry.owner)}的${typeMeta(unitEntry.type).name}晋升为 ${nextRank} 级老兵。`, "system");
       }
-    }
-    function transportCost(cargoTypes = []) {
-      return typeMeta("transport").cost + normalizeCargoTypes(cargoTypes).reduce((sum, type) => sum + typeMeta(type).cost, 0);
-    }
-    function cargoLabel(type) {
-      return type === "none" ? "空位" : `${typeMeta(type).icon} ${typeMeta(type).name}`;
-    }
-    function describeCargo(cargoTypes = []) {
-      const types = normalizeCargoTypes(cargoTypes);
-      return types.length ? types.map((type) => typeMeta(type).name).join("、") : "空舱";
     }
     function transportConfigMarkup(presetKey, title) {
       const capacity = typeMeta("transport").transport;
