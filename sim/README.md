@@ -10,11 +10,34 @@
 |---|---|---|
 | `npm run sim` | 手工探查：跑几局看指标，调参时的即时反馈 | 无断言，只出数据 |
 | `npm run sim:suite` | 防**平衡漂移**：胜率是否还在合理区间 | 宽区间（如 25%~75%） |
+| `npm run verify:fast` | 同上，只跑 4 个单 seed 场景，**约 15 秒** | 零容忍（覆盖面较窄） |
 | `npm run verify` | 防**重构搬错**：行为是否与基线逐字段全等 | 零容忍，一个数字都不能变 |
 
 `verify` 能成立，是因为 `fastBatch()` 会把 `Math.random` 换成种子化 LCG 再跑、
 跑完还原（见 `src/main.js` 的 `makeRng`）。因此同一组 `(config, seed, rounds, cap)`
 必然产出逐字节相同的结果 —— 这就是纯结构重构所需要的行为等价性证明。
+
+## 并行执行
+
+场景矩阵按 `(场景, seed)` 拆成 8 个任务单元，由 `sim/pool.js` fork 多个进程并发跑
+（默认 `CPU 核数 - 1`，上限 8）。全量校验从 125 秒降到约 34 秒。
+
+```bash
+npm run verify              # 并行，约 34 秒
+npm run verify:fast         # 4 个单 seed 场景，约 15 秒
+node sim/verify.js jobs=1   # 退回单进程串行
+```
+
+**并行结果与串行逐字节相同**，这一点是实测验证的、不是推理出来的：接入时用
+并行跑了一遍去比对同一份 `baseline.json`，全绿才算数。
+
+如果哪天并行和串行结果对不上，那说明代码里有跨局残留的模块级状态（缓存没清
+干净之类），**那本身就是必须修的 bug**，不要靠 `jobs=1` 退回串行来掩盖。
+
+> 踩过的坑：`createHarness(config)` 里的 config 只是 DOM 打桩的**读取兜底**，
+> 而 `domReady()` 触发的 `setup()` 会覆写元素的 `_value`。所以建完 harness 后
+> 必须再显式 `setConfig()` 一次，否则跑的其实是默认大厅配置 —— 结果依然是一局
+> 合法对局，只是和基线对不上。`sim/worker.js` 里已处理。
 
 ## 标准工作流
 
@@ -23,11 +46,13 @@
 ```bash
 npm run verify          # 动手前先确认是绿的
 # ... 拆一个模块 ...
-npm run verify          # 全量约 2 分钟
+npm run verify:fast     # 改一刀验一次，15 秒
+# ... 再拆几个 ...
+npm run verify          # 提交前跑全量，34 秒
 git commit              # 绿了才提交，红了就回查
 ```
 
-定位问题时只跑单个场景会快很多（约 30 秒）：
+定位问题时只跑单个场景更快：
 
 ```bash
 npm run verify -- only=strait-2ai

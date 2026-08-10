@@ -189,4 +189,4 @@ function parseOnly(args) {
   return args.only ? new Set(String(args.only).split(',').map(s => s.trim()).filter(Boolean)) : null;
 }
 
-module.exports = { SCENARIOS, runScenarios, deepDiff, sortKeys, parseArgs, parseOnly };
+module.exports = { SCENARIOS, runScenarios, deepDiff, sortKeys, fingerprintRun, parseArgs, parseOnly };

@@ -4,18 +4,22 @@
 // 真的动了游戏逻辑 —— 要么是搬错了，要么是无意中改了行为。
 //
 // 用法：
-//   npm run verify                       全部场景
+//   npm run verify                       全部场景（多进程并行）
+//   npm run verify:fast                  只跑最快的一个场景，改一刀验一次用
 //   node sim/verify.js only=strait-2ai   只验某几个场景（定位问题时用，快很多）
+//   node sim/verify.js jobs=1            退回单进程串行（怀疑并行本身有问题时用）
 //   node sim/verify.js max=50            最多打印多少条差异（默认 25）
 //
 // 退出码：0 = 行为一致；1 = 有差异 / 基线缺失 / 运行出错。
 const fs = require('fs');
 const path = require('path');
 const { runScenarios, deepDiff, parseArgs, parseOnly } = require('./scenarios');
+const { runScenariosParallel, defaultJobs } = require('./pool');
 
 const args = parseArgs();
 const only = parseOnly(args);
 const maxPrint = Number(args.max || 25);
+const jobs = args.jobs === undefined ? defaultJobs() : Math.max(1, Number(args.jobs) || 1);
 const baseFile = args.baseline ? path.resolve(args.baseline) : path.join(__dirname, 'baseline.json');
 
 function shortValue(value) {
@@ -38,14 +42,14 @@ async function main() {
     // 差异未必是你的代码造成的 —— 先提示，避免误判。
     console.log(`⚠️  当前 Node ${process.version} 与生成基线时不同，若出现差异请先在相同版本下复核。`);
   }
-  console.log('开始校验，各场景进度：');
+  console.log(`开始校验（${jobs > 1 ? `${jobs} 进程并行` : '单进程串行'}），各场景进度：`);
 
-  const actual = await runScenarios({
-    only,
-    onProgress: (scn, seed, done, total) => {
-      console.log(`  [${done}/${total}] ${scn.id.padEnd(15)} seed=${seed}`);
-    }
-  });
+  const onProgress = (scn, seed, done, total) => {
+    console.log(`  [${done}/${total}] ${scn.id.padEnd(15)} seed=${seed}`);
+  };
+  const actual = jobs > 1
+    ? await runScenariosParallel({ only, jobs, onProgress })
+    : await runScenarios({ only, onProgress });
 
   const rows = [];
   let totalDiffs = 0;

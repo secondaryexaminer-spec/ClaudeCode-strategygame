@@ -10,7 +10,8 @@
     "sim": "node sim/run.js",
     "sim:suite": "node sim/suite.js",
     "snap": "node build.js && node sim/snapshot.js",
-    "verify": "node build.js && node sim/verify.js"
+    "verify": "node build.js && node sim/verify.js",
+    "verify:fast": "node build.js && node sim/verify.js only=coast-3ai,diff-gap,scripted-bridgehead,scripted-naval"
   },
   "devDependencies": {
     "esbuild": "^0.23.1"

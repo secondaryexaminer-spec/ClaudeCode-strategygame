@@ -2,8 +2,9 @@
 // 生成重构基线：跑完整场景矩阵，把行为指纹写进 sim/baseline.json（该文件需入库）。
 //
 // 用法：
-//   npm run snap                          全部场景
+//   npm run snap                          全部场景（多进程并行）
 //   node sim/snapshot.js only=strait-2ai  只重算某几个场景（其余保留原值）
+//   node sim/snapshot.js jobs=1           退回单进程串行
 //   node sim/snapshot.js out=sim/x.json   写到别处
 //
 // ⚠️ 什么时候该重新生成基线：
@@ -14,9 +15,11 @@
 const fs = require('fs');
 const path = require('path');
 const { runScenarios, parseArgs, parseOnly, SCENARIOS } = require('./scenarios');
+const { runScenariosParallel, defaultJobs } = require('./pool');
 
 const args = parseArgs();
 const only = parseOnly(args);
+const jobs = args.jobs === undefined ? defaultJobs() : Math.max(1, Number(args.jobs) || 1);
 const outFile = args.out ? path.resolve(args.out) : path.join(__dirname, 'baseline.json');
 
 async function main() {
@@ -27,14 +30,14 @@ async function main() {
   if (only) {
     console.log(`只重算场景：${[...only].join(', ')}（其余场景沿用旧基线）`);
   }
-  console.log('开始生成基线，各场景进度：');
+  console.log(`开始生成基线（${jobs > 1 ? `${jobs} 进程并行` : '单进程串行'}），各场景进度：`);
 
-  const scenarios = await runScenarios({
-    only,
-    onProgress: (scn, seed, done, total) => {
-      console.log(`  [${done}/${total}] ${scn.id.padEnd(15)} seed=${seed}`);
-    }
-  });
+  const onProgress = (scn, seed, done, total) => {
+    console.log(`  [${done}/${total}] ${scn.id.padEnd(15)} seed=${seed}`);
+  };
+  const scenarios = jobs > 1
+    ? await runScenariosParallel({ only, jobs, onProgress })
+    : await runScenarios({ only, onProgress });
 
   // 局部重算时，把新结果合并进旧基线，不丢掉未跑的场景。
   let merged = scenarios;
