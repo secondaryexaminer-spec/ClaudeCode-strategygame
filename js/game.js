@@ -927,6 +927,188 @@
     };
   }
 
+  // src/game/turn.js
+  function createTurn(rt) {
+    function healOwner(owner) {
+      for (const unitEntry of rt.game.units.filter((entry) => entry.owner === owner)) {
+        const supports = rt.supportSites(unitEntry);
+        if (!supports.length) {
+          unitEntry.lastAttacked = false;
+          continue;
+        }
+        const nearest = Math.min(...supports.map((siteEntry) => dist(siteEntry, unitEntry)));
+        if (!unitEntry.lastAttacked) {
+          const ratio = (nearest === 0 ? 0.16 : nearest <= 1 ? 0.1 : nearest >= 14 ? 0.02 : Math.max(0.02, 0.1 - (nearest - 1) * 0.08 / 13)) * healMultiplier(unitEntry);
+          unitEntry.hp = Math.min(unitEntry.maxHp, unitEntry.hp + Math.max(1, Math.ceil(unitEntry.maxHp * ratio)));
+        }
+        unitEntry.lastAttacked = false;
+      }
+    }
+    function grantIncome(owner) {
+      const base = rt.game.sites.filter((entry) => entry.owner === owner).reduce((sum, entry) => sum + entry.income, 0);
+      const gain = Math.round(base * (rt.game.settings?.incomeMult || 1));
+      rt.game.goldByOwner[owner] += gain;
+      if (gain > 0) {
+        rt.log(`${rt.ownerName(owner)}获得 ${gain} 金币收入。`, "gold");
+      }
+    }
+    function teamStandings() {
+      const standings = {};
+      const ensure = (team) => standings[team] = standings[team] || { cities: 0, sites: 0, units: 0 };
+      for (const siteEntry of rt.game.sites) {
+        if (siteEntry.owner === "neutral") {
+          continue;
+        }
+        const bucket = ensure(rt.teamOf(siteEntry.owner));
+        bucket.sites += 1;
+        if (siteEntry.kind === "city") {
+          bucket.cities += 1;
+        }
+      }
+      for (const unitEntry of rt.game.units) {
+        ensure(rt.teamOf(unitEntry.owner)).units += 1;
+      }
+      return standings;
+    }
+    function resolveStalemate() {
+      const standings = teamStandings();
+      const ranked = Object.entries(standings).sort((a, b) => b[1].cities - a[1].cities || b[1].sites - a[1].sites || b[1].units - a[1].units);
+      if (!ranked.length) {
+        finish(false, `战局在第 ${rt.game.turn} 回合陷入僵局，双方均无立足点。`);
+        return;
+      }
+      const [leadTeam, lead] = ranked[0];
+      const playerWin = !rt.game.settings?.spectator && rt.teamOf("player") === leadTeam;
+      finish(playerWin, `战局在第 ${rt.game.turn} 回合达到回合上限，判定 ${leadTeam} 组以 ${lead.cities} 城 / ${lead.sites} 据点领先胜出。`);
+    }
+    function checkEnd() {
+      const game = rt.game;
+      if (game.over || game.freeplay) {
+        return;
+      }
+      if (game.settings?.spectator) {
+        const activeTeams2 = /* @__PURE__ */ new Set();
+        for (const unitEntry of game.units) {
+          activeTeams2.add(rt.teamOf(unitEntry.owner));
+        }
+        for (const siteEntry of game.sites) {
+          if (siteEntry.owner !== "neutral") {
+            activeTeams2.add(rt.teamOf(siteEntry.owner));
+          }
+        }
+        if (game.settings.mode === "skirmish") {
+          const combatTeams = new Set(game.units.map((unitEntry) => rt.teamOf(unitEntry.owner)));
+          if (combatTeams.size === 1 && combatTeams.size > 0) {
+            finish(true, `${[...combatTeams][0]} 组赢得了观战遭遇战。`);
+          }
+          return;
+        }
+        if (game.settings.mode === "survival" && game.turn >= 12) {
+          const ranked = [...activeTeams2].sort((a, b) => game.sites.filter((siteEntry) => siteEntry.kind === "city" && rt.teamOf(siteEntry.owner) === b).length - game.sites.filter((siteEntry) => siteEntry.kind === "city" && rt.teamOf(siteEntry.owner) === a).length);
+          if (ranked[0]) {
+            finish(true, `${ranked[0]} 组在观战守城模式中存活到第12回合。`);
+          }
+          return;
+        }
+        const hostileTeams2 = new Set(game.sites.filter((siteEntry) => (siteEntry.kind === "city" || siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && siteEntry.owner !== "neutral").map((siteEntry) => rt.teamOf(siteEntry.owner)));
+        if (hostileTeams2.size === 1) {
+          const winnerTeam = [...hostileTeams2][0];
+          const enemyEngineers = game.units.some((unitEntry) => unitEntry.type === "engineer" && rt.teamOf(unitEntry.owner) !== winnerTeam || unitEntry.cargo?.some((payload) => payload.type === "engineer" && rt.teamOf(payload.owner) !== winnerTeam));
+          if (!enemyEngineers) {
+            finish(true, `${winnerTeam} 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。`);
+            return;
+          }
+        }
+        if (activeTeams2.size === 1 && activeTeams2.size > 0) {
+          finish(true, `${[...activeTeams2][0]} 组成为战场最后赢家。`);
+        }
+        return;
+      }
+      const playerTeam = rt.teamOf("player");
+      const activeTeams = /* @__PURE__ */ new Set();
+      for (const unitEntry of game.units) {
+        activeTeams.add(rt.teamOf(unitEntry.owner));
+      }
+      for (const siteEntry of game.sites) {
+        if (siteEntry.owner !== "neutral") {
+          activeTeams.add(rt.teamOf(siteEntry.owner));
+        }
+      }
+      const playerAlive = [...activeTeams].includes(playerTeam);
+      if (game.settings.mode === "survival") {
+        const alliedCity = game.sites.some((siteEntry) => siteEntry.kind === "city" && rt.areAllies(siteEntry.owner, "player"));
+        if (!alliedCity && !game.units.some((unitEntry) => rt.areAllies(unitEntry.owner, "player"))) {
+          finish(false, "你的组已经失去全部立足点。");
+          return;
+        }
+        if (game.turn >= 12 && alliedCity) {
+          finish(true, "你成功守住了关键城市直到第12回合。");
+        }
+        return;
+      }
+      if (game.settings.mode === "skirmish") {
+        const combatTeams = new Set(game.units.map((unitEntry) => rt.teamOf(unitEntry.owner)));
+        if (!combatTeams.has(playerTeam)) {
+          finish(false, "你的组全部野战部队已被消灭。");
+          return;
+        }
+        if (combatTeams.size === 1 && combatTeams.has(playerTeam)) {
+          finish(true, "敌对组野战部队已全部被消灭。");
+        }
+        return;
+      }
+      const enemyControlledCities = game.sites.filter((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral" && rt.teamOf(siteEntry.owner) !== playerTeam);
+      const enemyControlledSeaSites = game.sites.filter((siteEntry) => (siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && siteEntry.owner !== "neutral" && rt.teamOf(siteEntry.owner) !== playerTeam);
+      if (!enemyControlledCities.length && !enemyControlledSeaSites.length) {
+        const enemyEngineers = game.units.some((unitEntry) => unitEntry.type === "engineer" && rt.teamOf(unitEntry.owner) !== playerTeam || unitEntry.cargo?.some((payload) => payload.type === "engineer" && rt.teamOf(payload.owner) !== playerTeam));
+        if (!enemyEngineers) {
+          finish(true, "你已占领全部敌对城市与海上据点，并清除了全部敌方工程师。");
+          return;
+        }
+      }
+      const hostileTeams = new Set(game.sites.filter((siteEntry) => (siteEntry.kind === "city" || siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && siteEntry.owner !== "neutral").map((siteEntry) => rt.teamOf(siteEntry.owner)));
+      if (hostileTeams.size === 1 && !hostileTeams.has(playerTeam)) {
+        const winnerTeam = [...hostileTeams][0];
+        const enemyEngineers = game.units.some((unitEntry) => unitEntry.type === "engineer" && rt.teamOf(unitEntry.owner) !== winnerTeam || unitEntry.cargo?.some((payload) => payload.type === "engineer" && rt.teamOf(payload.owner) !== winnerTeam));
+        if (!enemyEngineers) {
+          finish(false, "敌方已占领全部城市与海上据点，并清除了你方全部工程师。");
+          return;
+        }
+      }
+      if (!playerAlive) {
+        finish(false, "你的组已经失去全部据点与部队。");
+        return;
+      }
+      if (activeTeams.size === 1 && activeTeams.has(playerTeam)) {
+        finish(true, "战场上只剩下你的组仍具战争能力。");
+      }
+    }
+    function finish(win, text) {
+      rt.game.over = true;
+      rt.game.stats.endTime = Date.now();
+      rt.game.result = { win, text };
+      rt.recordStatSnapshot("finish");
+      if (rt.fastSim) {
+        return;
+      }
+      rt.onGameOver(win, text);
+    }
+    function endGameNeutral() {
+      if (!rt.game || rt.game.over) {
+        return;
+      }
+      rt.hidePauseModal();
+      finish(null, "本局已手动结束，以下为本局统计。");
+    }
+    function sideLabel() {
+      if (rt.game.settings?.spectator) {
+        return `观战中 · ${rt.ownerShort(rt.game.side)}行动中 · ${rt.teamOf(rt.game.side)}组`;
+      }
+      return rt.game.side === "player" ? `你的回合 · ${rt.teamOf("player")}组` : `${rt.ownerShort(rt.game.side)}行动中 · ${rt.teamOf(rt.game.side)}组`;
+    }
+    return { healOwner, grantIncome, teamStandings, resolveStalemate, checkEnd, finish, endGameNeutral, sideLabel };
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -1464,6 +1646,7 @@
     function ownerExists(owner) {
       return game.units.some((entry) => entry.owner === owner) || game.sites.some((entry) => entry.owner === owner);
     }
+    let turnApi;
     const rt = {
       get game() {
         return game;
@@ -1476,6 +1659,9 @@
       },
       get S() {
         return S;
+      },
+      get fastSim() {
+        return fastSim;
       },
       get currentSaveKey() {
         return currentSaveKey;
@@ -1493,15 +1679,28 @@
       areAllies,
       areEnemies,
       ownerName,
+      ownerShort,
+      teamOf,
       tierName,
+      supportSites,
       log,
       incrementStat,
       incrementStrat,
       recordStatSnapshot,
       grantKills,
-      checkEnd,
       clearPendingOrder,
-      loadPayload: (payload) => loadPayload(payload)
+      checkEnd: () => turnApi.checkEnd(),
+      loadPayload: (payload) => loadPayload(payload),
+      hidePauseModal: () => $("pauseModal")?.classList.add("hidden"),
+      onGameOver: (win, text) => {
+        $("modalTitle").textContent = win === null ? "对局结束" : win ? "胜利！" : "战败";
+        $("modalText").textContent = text;
+        $("statsPanel").classList.remove("hidden");
+        renderStatsSummary(true);
+        drawStatsChart();
+        $("overlay").classList.remove("hidden");
+        refresh();
+      }
     };
     const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
     const {
@@ -1528,6 +1727,17 @@
       buildCamp,
       engineerLaunch
     } = createBuild(rt);
+    turnApi = createTurn(rt);
+    const {
+      healOwner,
+      grantIncome,
+      teamStandings,
+      resolveStalemate,
+      checkEnd,
+      finish,
+      endGameNeutral,
+      sideLabel
+    } = turnApi;
     function log(text, kind = "") {
       game.logs.push({ text, kind });
       if (game.logs.length > 80) {
@@ -1706,29 +1916,6 @@
       }
       expired.forEach((siteEntry) => log(`${siteEntry.name}补给耗尽，已自行拆除。`, "warning"));
     }
-    function healOwner(owner) {
-      for (const unitEntry of game.units.filter((entry) => entry.owner === owner)) {
-        const supports = supportSites(unitEntry);
-        if (!supports.length) {
-          unitEntry.lastAttacked = false;
-          continue;
-        }
-        const nearest = Math.min(...supports.map((siteEntry) => dist(siteEntry, unitEntry)));
-        if (!unitEntry.lastAttacked) {
-          const ratio = (nearest === 0 ? 0.16 : nearest <= 1 ? 0.1 : nearest >= 14 ? 0.02 : Math.max(0.02, 0.1 - (nearest - 1) * 0.08 / 13)) * healMultiplier(unitEntry);
-          unitEntry.hp = Math.min(unitEntry.maxHp, unitEntry.hp + Math.max(1, Math.ceil(unitEntry.maxHp * ratio)));
-        }
-        unitEntry.lastAttacked = false;
-      }
-    }
-    function grantIncome(owner) {
-      const base = game.sites.filter((entry) => entry.owner === owner).reduce((sum, entry) => sum + entry.income, 0);
-      const gain = Math.round(base * (game.settings?.incomeMult || 1));
-      game.goldByOwner[owner] += gain;
-      if (gain > 0) {
-        log(`${ownerName(owner)}获得 ${gain} 金币收入。`, "gold");
-      }
-    }
     function beginTurn(owner, initial) {
       if (game.over) {
         return;
@@ -1784,35 +1971,6 @@
       }
       beginTurn(game.ownerOrder[game.currentIndex], false);
     }
-    function teamStandings() {
-      const standings = {};
-      const ensure = (team) => standings[team] = standings[team] || { cities: 0, sites: 0, units: 0 };
-      for (const siteEntry of game.sites) {
-        if (siteEntry.owner === "neutral") {
-          continue;
-        }
-        const bucket = ensure(teamOf(siteEntry.owner));
-        bucket.sites += 1;
-        if (siteEntry.kind === "city") {
-          bucket.cities += 1;
-        }
-      }
-      for (const unitEntry of game.units) {
-        ensure(teamOf(unitEntry.owner)).units += 1;
-      }
-      return standings;
-    }
-    function resolveStalemate() {
-      const standings = teamStandings();
-      const ranked = Object.entries(standings).sort((a, b) => b[1].cities - a[1].cities || b[1].sites - a[1].sites || b[1].units - a[1].units);
-      if (!ranked.length) {
-        finish(false, `战局在第 ${game.turn} 回合陷入僵局，双方均无立足点。`);
-        return;
-      }
-      const [leadTeam, lead] = ranked[0];
-      const playerWin = !game.settings?.spectator && teamOf("player") === leadTeam;
-      finish(playerWin, `战局在第 ${game.turn} 回合达到回合上限，判定 ${leadTeam} 组以 ${lead.cities} 城 / ${lead.sites} 据点领先胜出。`);
-    }
     function landUnitCanReachForeignCity(unitEntry) {
       if (typeMeta(unitEntry.type).domain !== "land") {
         return false;
@@ -1857,136 +2015,6 @@
     function dominantCityTeam() {
       const cityTeams = [...new Set(game.sites.filter((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral").map((siteEntry) => teamOf(siteEntry.owner)))];
       return cityTeams.length === 1 ? cityTeams[0] : null;
-    }
-    function checkEnd() {
-      if (game.over || game.freeplay) {
-        return;
-      }
-      if (game.settings?.spectator) {
-        const activeTeams2 = /* @__PURE__ */ new Set();
-        for (const unitEntry of game.units) {
-          activeTeams2.add(teamOf(unitEntry.owner));
-        }
-        for (const siteEntry of game.sites) {
-          if (siteEntry.owner !== "neutral") {
-            activeTeams2.add(teamOf(siteEntry.owner));
-          }
-        }
-        if (game.settings.mode === "skirmish") {
-          const combatTeams = new Set(game.units.map((unitEntry) => teamOf(unitEntry.owner)));
-          if (combatTeams.size === 1 && combatTeams.size > 0) {
-            finish(true, `${[...combatTeams][0]} 组赢得了观战遭遇战。`);
-          }
-          return;
-        }
-        if (game.settings.mode === "survival" && game.turn >= 12) {
-          const ranked = [...activeTeams2].sort((a, b) => game.sites.filter((siteEntry) => siteEntry.kind === "city" && teamOf(siteEntry.owner) === b).length - game.sites.filter((siteEntry) => siteEntry.kind === "city" && teamOf(siteEntry.owner) === a).length);
-          if (ranked[0]) {
-            finish(true, `${ranked[0]} 组在观战守城模式中存活到第12回合。`);
-          }
-          return;
-        }
-        const hostileTeams2 = new Set(game.sites.filter((siteEntry) => (siteEntry.kind === "city" || siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && siteEntry.owner !== "neutral").map((siteEntry) => teamOf(siteEntry.owner)));
-        if (hostileTeams2.size === 1) {
-          const winnerTeam = [...hostileTeams2][0];
-          const enemyEngineers = game.units.some((unitEntry) => unitEntry.type === "engineer" && teamOf(unitEntry.owner) !== winnerTeam || unitEntry.cargo?.some((payload) => payload.type === "engineer" && teamOf(payload.owner) !== winnerTeam));
-          if (!enemyEngineers) {
-            finish(true, `${winnerTeam} 组完成了全部敌对城市与海上据点占领，并清除了敌方工程师。`);
-            return;
-          }
-        }
-        if (activeTeams2.size === 1 && activeTeams2.size > 0) {
-          finish(true, `${[...activeTeams2][0]} 组成为战场最后赢家。`);
-        }
-        return;
-      }
-      const playerTeam = teamOf("player");
-      const activeTeams = /* @__PURE__ */ new Set();
-      for (const unitEntry of game.units) {
-        activeTeams.add(teamOf(unitEntry.owner));
-      }
-      for (const siteEntry of game.sites) {
-        if (siteEntry.owner !== "neutral") {
-          activeTeams.add(teamOf(siteEntry.owner));
-        }
-      }
-      const playerAlive = [...activeTeams].includes(playerTeam);
-      if (game.settings.mode === "survival") {
-        const alliedCity = game.sites.some((siteEntry) => siteEntry.kind === "city" && areAllies(siteEntry.owner, "player"));
-        if (!alliedCity && !game.units.some((unitEntry) => areAllies(unitEntry.owner, "player"))) {
-          finish(false, "你的组已经失去全部立足点。");
-          return;
-        }
-        if (game.turn >= 12 && alliedCity) {
-          finish(true, "你成功守住了关键城市直到第12回合。");
-        }
-        return;
-      }
-      if (game.settings.mode === "skirmish") {
-        const combatTeams = new Set(game.units.map((unitEntry) => teamOf(unitEntry.owner)));
-        if (!combatTeams.has(playerTeam)) {
-          finish(false, "你的组全部野战部队已被消灭。");
-          return;
-        }
-        if (combatTeams.size === 1 && combatTeams.has(playerTeam)) {
-          finish(true, "敌对组野战部队已全部被消灭。");
-        }
-        return;
-      }
-      const enemyControlledCities = game.sites.filter((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral" && teamOf(siteEntry.owner) !== playerTeam);
-      const enemyControlledSeaSites = game.sites.filter((siteEntry) => (siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && siteEntry.owner !== "neutral" && teamOf(siteEntry.owner) !== playerTeam);
-      if (!enemyControlledCities.length && !enemyControlledSeaSites.length) {
-        const enemyEngineers = game.units.some((unitEntry) => unitEntry.type === "engineer" && teamOf(unitEntry.owner) !== playerTeam || unitEntry.cargo?.some((payload) => payload.type === "engineer" && teamOf(payload.owner) !== playerTeam));
-        if (!enemyEngineers) {
-          finish(true, "你已占领全部敌对城市与海上据点，并清除了全部敌方工程师。");
-          return;
-        }
-      }
-      const hostileTeams = new Set(game.sites.filter((siteEntry) => (siteEntry.kind === "city" || siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && siteEntry.owner !== "neutral").map((siteEntry) => teamOf(siteEntry.owner)));
-      if (hostileTeams.size === 1 && !hostileTeams.has(playerTeam)) {
-        const winnerTeam = [...hostileTeams][0];
-        const enemyEngineers = game.units.some((unitEntry) => unitEntry.type === "engineer" && teamOf(unitEntry.owner) !== winnerTeam || unitEntry.cargo?.some((payload) => payload.type === "engineer" && teamOf(payload.owner) !== winnerTeam));
-        if (!enemyEngineers) {
-          finish(false, "敌方已占领全部城市与海上据点，并清除了你方全部工程师。");
-          return;
-        }
-      }
-      if (!playerAlive) {
-        finish(false, "你的组已经失去全部据点与部队。");
-        return;
-      }
-      if (activeTeams.size === 1 && activeTeams.has(playerTeam)) {
-        finish(true, "战场上只剩下你的组仍具战争能力。");
-      }
-    }
-    function finish(win, text) {
-      game.over = true;
-      game.stats.endTime = Date.now();
-      game.result = { win, text };
-      recordStatSnapshot("finish");
-      if (fastSim) {
-        return;
-      }
-      $("modalTitle").textContent = win === null ? "对局结束" : win ? "胜利！" : "战败";
-      $("modalText").textContent = text;
-      $("statsPanel").classList.remove("hidden");
-      renderStatsSummary(true);
-      drawStatsChart();
-      $("overlay").classList.remove("hidden");
-      refresh();
-    }
-    function endGameNeutral() {
-      if (!game || game.over) {
-        return;
-      }
-      $("pauseModal")?.classList.add("hidden");
-      finish(null, "本局已手动结束，以下为本局统计。");
-    }
-    function sideLabel() {
-      if (game.settings?.spectator) {
-        return `观战中 · ${ownerShort(game.side)}行动中 · ${teamOf(game.side)}组`;
-      }
-      return game.side === "player" ? `你的回合 · ${teamOf("player")}组` : `${ownerShort(game.side)}行动中 · ${teamOf(game.side)}组`;
     }
     function drawSelection(x, y, color) {
       ctx.save();
