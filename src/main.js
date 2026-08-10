@@ -23,6 +23,9 @@ import { createBuild } from './game/build.js';
 import { createTurn } from './game/turn.js';
 import { createWorldgen, pickSpacedCells, farthestPointSample, distributeCells } from './world/worldgen.js';
 import { createTransport } from './game/transport.js';
+import { createScoring } from './ai/scoring.js';
+import { createPathing } from './ai/pathing.js';
+import { createScripted } from './ai/scripted.js';
 
 (() => {
   'use strict';
@@ -43,8 +46,6 @@ import { createTransport } from './game/transport.js';
   let toastTimer = null;
   let game = null;
   let fastSim = false;
-  const distFieldCache = new Map();
-  const landReachCache = new Map();
   const uiState = {
     shipyardCargo: ['none', 'none', 'none', 'none', 'none'],
     engineerCargo: ['none', 'none', 'none', 'none', 'none']
@@ -631,8 +632,19 @@ import { createTransport } from './game/transport.js';
   // 才创建的 turnApi 的一个方法。写成 `checkEnd,` 会在这一行就去读还没初始化的
   // const，直接 TDZ 报错。combat.js 靠 rt.checkEnd 结束对局，这条链断了的表现是
   // 「战斗能打但对局永远不结束」。
+  //
+  // 下面所有 xxxApi 变量都是同一个道理：模块之间互相要用对方的函数，而对象字面量
+  // 在任何 createXxx(rt) 之前就求值完了。凡是指向「已拆出模块」的项，一律写成
+  // 箭头函数转发。规则很简单：指向 main.js 自己的函数用简写，指向模块的用箭头。
+  //
+  // ⚠️ 装配顺序不能乱：rt → movement → build → turn → transport → worldgen →
+  // scoring → pathing。转发本身是惰性的，但解构出来的 const 不是 —— 谁先谁后
+  // 决定了哪些名字在哪一行可用。
   let turnApi;
   let transportApi;
+  let scoringApi;
+  let combatApi;
+  let buildApi;
   const rt = {
     get game() { return game; },
     get W() { return W; },
@@ -646,8 +658,16 @@ import { createTransport } from './game/transport.js';
     getUnit, getSite, isLandTile, isWaterTile, isCoastalWater, isDeepWater,
     areAllies, areEnemies, ownerName, ownerShort, teamOf, tierName, ownerOrder,
     supportSites: unitEntry => transportApi.supportSites(unitEntry),
+    moveUnit: (unitEntry, x, y) => transportApi.moveUnit(unitEntry, x, y),
     reachable: unitEntry => reachable(unitEntry),
+    enemyThreat: (owner, x, y) => scoringApi.enemyThreat(owner, x, y),
+    strategicLandingScore: (owner, cell) => scoringApi.strategicLandingScore(owner, cell),
     log, incrementStat, incrementStrat, recordStatSnapshot, grantKills,
+    logAiDecision, refresh, pause, aiStepDelay, advanceTurn,
+    canAttack: (attacker, defender, fromCell) => combatApi.canAttack(attacker, defender, fromCell),
+    attack: (attacker, defender) => combatApi.attack(attacker, defender),
+    buildableTypes: siteEntry => buildApi.buildableTypes(siteEntry),
+    buildAtSite: (owner, siteEntry, type, options) => buildApi.buildAtSite(owner, siteEntry, type, options),
     clearPendingOrder,
     checkEnd: () => turnApi.checkEnd(),
     loadPayload: payload => loadPayload(payload),
@@ -671,6 +691,7 @@ import { createTransport } from './game/transport.js';
     upgradeSite, fullHealSite, aiRepair, consumeAction, engineerBuildCells,
     canBuildCamp, canEngineerLaunch, buildCamp, engineerLaunch
   } = createBuild(rt);
+  buildApi = { buildableTypes, buildAtSite };
   turnApi = createTurn(rt);
   const {
     healOwner, grantIncome, decayTemporarySites, teamStandings, resolveStalemate,
@@ -685,6 +706,19 @@ import { createTransport } from './game/transport.js';
     collectLandCells, makeCities, makeSpecialSites,
     nearestCoastalWater, makeNavalSites, spawnLand, spawnSea
   } = createWorldgen(rt);
+  scoringApi = createScoring(rt);
+  const {
+    strategicSiteValue, isBridgeheadSite, frontlineCount, siteProjectionValue,
+    enemyThreat, friendSupport, allyCongestion, cityEconomyValue,
+    targetValue, nearbyEnemies, unitRoleCellBonus, unitRoleTargetBonus,
+    strategicLandingScore
+  } = scoringApi;
+  const {
+    strategicPassable, buildDistanceField, futureReach,
+    moveToward, moveTransportToward, bestLanding,
+    landUnitCanReachForeignCity, hasLandReachToEnemyCity,
+    clearDistFieldCache, clearLandReachCache
+  } = createPathing(rt);
 
   function log(text, kind = '') {
     game.logs.push({ text, kind });
@@ -700,28 +734,12 @@ import { createTransport } from './game/transport.js';
     toastTimer = setTimeout(() => $('toast').classList.add('hidden'), 1800);
   }
 
-  const { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack } = createCombat(rt);
-
-  function strategicSiteValue(siteEntry, owner, unitEntry) {
-    if (siteEntry.owner === owner || areAllies(siteEntry.owner, owner)) {
-      return 0;
-    }
-    let score = siteEntry.kind === 'city' ? 26 : siteEntry.kind === 'shipyard' ? 24 : siteEntry.kind === 'camp' ? 14 : siteEntry.kind.startsWith('oil') ? 24 : siteEntry.kind.startsWith('barracks') ? 20 : 18;
-    score += siteEntry.income + siteEntry.tier * 5;
-    if (siteEntry.owner === 'neutral') {
-      score *= 0.82;
-    }
-    if (unitEntry) {
-      const domain = typeMeta(unitEntry.type).domain;
-      if ((siteEntry.kind === 'city' || siteEntry.kind.startsWith('oil') || siteEntry.kind.startsWith('barracks')) && domain === 'sea') {
-        score *= 0.3;
-      }
-      if ((siteEntry.kind === 'shipyard' || siteEntry.kind === 'fortress') && domain === 'land') {
-        score *= 0.25;
-      }
-    }
-    return score;
-  }
+  combatApi = createCombat(rt);
+  const { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack } = combatApi;
+  const {
+    bridgeheadTryAttack, bridgeheadDefendCell, bridgeheadProduce, bridgeheadTurn,
+    navalTryAttack, navalPatrolCell, navalLandHoldCell, navalProduce, navalTurn
+  } = createScripted(rt);
 
   function captureSite(unitEntry) {
     const siteEntry = getSite(unitEntry.x, unitEntry.y);
@@ -773,19 +791,6 @@ import { createTransport } from './game/transport.js';
     const options = game.units.filter(entry => entry.owner === transport.owner && typeMeta(entry.type).domain === 'land' && diagonalDist(entry, transport) === 1);
     options.sort((a, b) => typeMeta(b.type).level - typeMeta(a.type).level || b.hp - a.hp);
     return options.length ? loadTransport(transport, options[0]) : false;
-  }
-
-  function strategicLandingScore(owner, cell) {
-    let score = 0;
-    for (const siteEntry of game.sites) {
-      if (areEnemies(siteEntry.owner, owner) && (siteEntry.kind === 'city' || siteEntry.kind.startsWith('oil'))) {
-        score += 18 / (1 + dist(siteEntry, cell));
-      }
-    }
-    // Prefer undefended beaches: land where the enemy is thin, not into their defensive line.
-    score -= nearbyEnemies(cell, owner, 2) * 8;
-    score -= nearbyEnemies(cell, owner, 4) * 3;
-    return score;
   }
 
   function autoUnloadAdjacent(transport) {
@@ -852,33 +857,6 @@ import { createTransport } from './game/transport.js';
       }
     }
     beginTurn(game.ownerOrder[game.currentIndex], false);
-  }
-
-  function landUnitCanReachForeignCity(unitEntry) {
-    if (typeMeta(unitEntry.type).domain !== 'land') {
-      return false;
-    }
-    const seen = new Set([cellKey(unitEntry.x, unitEntry.y)]);
-    const queue = [{ x: unitEntry.x, y: unitEntry.y }];
-    while (queue.length) {
-      const current = queue.shift();
-      const siteEntry = getSite(current.x, current.y);
-      if (siteEntry?.kind === 'city' && !areAllies(siteEntry.owner, unitEntry.owner)) {
-        return true;
-      }
-      for (const next of adjacent8(current.x, current.y)) {
-        if (!isLandTile(next.x, next.y)) {
-          continue;
-        }
-        const nextKey = cellKey(next.x, next.y);
-        if (seen.has(nextKey)) {
-          continue;
-        }
-        seen.add(nextKey);
-        queue.push(next);
-      }
-    }
-    return false;
   }
 
   function teamCanContestLand(team) {
@@ -1348,30 +1326,6 @@ import { createTransport } from './game/transport.js';
     return supports[0] || null;
   }
 
-  function futureReach(unitEntry, lookahead) {
-    return typeMeta(unitEntry.type).range + unitEntry.move + Math.max(0, lookahead - 1) * Math.max(1, Math.floor(unitEntry.maxMove * 0.85));
-  }
-
-  function isBridgeheadSite(siteEntry) {
-    if (!siteEntry) {
-      return false;
-    }
-    const passableNeighbors = adjacent4(siteEntry.x, siteEntry.y).filter(cell => {
-      if (game.terrain[siteEntry.y][siteEntry.x] === 'water') {
-        return isWaterTile(cell.x, cell.y);
-      }
-      return isLandTile(cell.x, cell.y);
-    });
-    return passableNeighbors.length <= 2;
-  }
-
-  function frontlineCount(owner, target, radius = 3) {
-    if (!target) {
-      return 0;
-    }
-    return game.units.filter(unitEntry => unitEntry.owner === owner && dist(unitEntry, target) <= radius).length;
-  }
-
   function logAiDecision(owner, text) {
     log(`${ownerName(owner)}部署：${text}`, 'system');
   }
@@ -1418,12 +1372,6 @@ import { createTransport } from './game/transport.js';
       total += Math.max(0, (typeMeta(ally.type).atk + typeMeta(ally.type).level * 2 - Math.max(0, distance - reach) * 2) * (ally.hp / ally.maxHp));
     }
     return total;
-  }
-
-  function siteProjectionValue(owner, siteEntry, lookahead) {
-    const relevantUnits = game.units.filter(unitEntry => unitEntry.owner === owner && (siteEntry.kind === 'city' ? typeMeta(unitEntry.type).domain === 'land' : true));
-    const nearest = relevantUnits.length ? Math.min(...relevantUnits.map(unitEntry => dist(unitEntry, siteEntry))) : Math.max(W, H);
-    return strategicSiteValue(siteEntry, owner) + Math.max(0, lookahead * 8 - nearest);
   }
 
   function buildStrategicIntent(owner, profile) {
@@ -1542,112 +1490,12 @@ import { createTransport } from './game/transport.js';
     return best;
   }
 
-  function enemyThreat(owner, x, y) {
-    let score = 0;
-    for (const enemy of game.units.filter(entry => areEnemies(entry.owner, owner))) {
-      const reach = enemy.move + typeMeta(enemy.type).range;
-      const d = dist(enemy, { x, y });
-      if (d <= reach + 1) {
-        score += typeMeta(enemy.type).atk * (enemy.hp / enemy.maxHp) * (d <= typeMeta(enemy.type).range ? 1.2 : 0.55);
-      }
-    }
-    const siteEntry = getSite(x, y);
-    if (siteEntry && areAllies(siteEntry.owner, owner)) {
-      score *= 0.82;
-    }
-    return score;
-  }
-
-  function friendSupport(owner, x, y) {
-    return game.units.filter(entry => areAllies(entry.owner, owner) && dist(entry, { x, y }) <= 3).length * 1.4;
-  }
-
-  function allyCongestion(owner, cell, excludeId = null) {
-    let total = 0;
-    for (const ally of game.units) {
-      if (ally.owner !== owner || ally.id === excludeId) {
-        continue;
-      }
-      if (diagonalDist(ally, cell) <= 1) {
-        total += diagonalDist(ally, cell) === 0 ? 1.6 : 0.65;
-      }
-    }
-    return total;
-  }
-
-  function cityEconomyValue(siteEntry, owner) {
-    if (areAllies(siteEntry.owner, owner)) {
-      return 0;
-    }
-    const earlyTurnBonus = Math.max(0, 10 - game.turn) * 1.8;
-    const neutralBonus = siteEntry.owner === 'neutral' ? 12 : 8;
-    if (siteEntry.kind === 'city') {
-      return 18 + siteEntry.income * 2.2 + siteEntry.tier * 4 + earlyTurnBonus + neutralBonus;
-    }
-    if (siteEntry.kind.startsWith('oil')) {
-      return 24 + siteEntry.income * 2.8 + earlyTurnBonus * 0.8 + neutralBonus;
-    }
-    if (siteEntry.kind === 'shipyard') {
-      return 16 + siteEntry.income * 1.8 + earlyTurnBonus * 0.5 + neutralBonus * 0.7;
-    }
-    return 0;
-  }
-
   function computeUnitState(unitEntry) {
     const previous = unitEntry.aiState || { stalledTurns: 0, rerouteTurns: 0, failedObjectiveKey: null };
     return {
       ...previous,
       lastPosition: previous.lastPosition || { x: unitEntry.x, y: unitEntry.y }
     };
-  }
-
-  function strategicPassable(unitEntry, x, y) {
-    if (!inBounds(x, y)) {
-      return false;
-    }
-    const domain = typeMeta(unitEntry.type).domain;
-    if (domain === 'sea') {
-      return game.terrain[y][x] === 'water';
-    }
-    return game.terrain[y][x] !== 'water' && game.terrain[y][x] !== 'mountain';
-  }
-
-  function buildDistanceField(unitEntry, target) {
-    if (!target) {
-      return null;
-    }
-    if (!strategicPassable(unitEntry, target.x, target.y)) {
-      return null;
-    }
-    // Field depends only on terrain (fixed per game) + domain, so cache per game.
-    const domain = typeMeta(unitEntry.type).domain;
-    const cacheKey = `${domain}:${target.x},${target.y}`;
-    const useCache = typeof globalThis === 'undefined' || !globalThis.__NO_DIST_CACHE;
-    const cached = useCache ? distFieldCache.get(cacheKey) : undefined;
-    if (cached) {
-      return cached;
-    }
-    const distances = new Map([[cellKey(target.x, target.y), 0]]);
-    const queue = [{ x: target.x, y: target.y, cost: 0 }];
-    let head = 0;
-    while (head < queue.length) {
-      const current = queue[head++];
-      const nextCost = current.cost + 1;
-      for (const next of adjacent8(current.x, current.y)) {
-        if (!strategicPassable(unitEntry, next.x, next.y)) {
-          continue;
-        }
-        const key = cellKey(next.x, next.y);
-        if (!distances.has(key)) {
-          distances.set(key, nextCost);
-          queue.push({ x: next.x, y: next.y, cost: nextCost });
-        }
-      }
-    }
-    if (useCache) {
-      distFieldCache.set(cacheKey, distances);
-    }
-    return distances;
   }
 
   function finalizeUnitState(unitEntry, state, objectiveKey, movedThisTurn) {
@@ -1665,87 +1513,6 @@ import { createTransport } from './game/transport.js';
       rerouteTurns,
       failedObjectiveKey: stalledTurns >= 2 ? objectiveKey : state.failedObjectiveKey
     };
-  }
-
-  function targetValue(unitEntry) {
-    return typeMeta(unitEntry.type).level * 8 + unitEntry.hp * 0.4 + (unitEntry.type === 'engineer' ? 14 : 0);
-  }
-
-  function nearbyEnemies(cell, owner, radius = 1) {
-    return game.units.filter(unitEntry => areEnemies(unitEntry.owner, owner) && dist(unitEntry, cell) <= radius).length;
-  }
-
-  function unitRoleCellBonus(owner, unitEntry, cell, intent) {
-    const type = unitEntry.type;
-    const siteEntry = getSite(cell.x, cell.y);
-    const coastal = adjacent8(cell.x, cell.y).some(next => isWaterTile(next.x, next.y));
-    let score = 0;
-    if (type === 'scout') {
-      score += cityEconomyValue(siteEntry || { kind: 'none', owner }, owner) * 0.35;
-      score += coastal ? 1 : 0;
-    }
-    if (type === 'spearman') {
-      score += intent?.focusTarget?.type === 'cavalry' ? 6 : 0;
-      score += intent?.assaultSite && isBridgeheadSite(intent.assaultSite) && dist(cell, intent.assaultSite) <= 1 ? 5 : 0;
-    }
-    if (type === 'archer' || type === 'crossbow') {
-      score += game.terrain[cell.y][cell.x] === 'forest' ? 6 : 0;
-      score -= nearbyEnemies(cell, owner, 1) * 8;
-      score += friendSupport(owner, cell.x, cell.y) * 0.3;
-    }
-    if (type === 'cavalry') {
-      score += intent?.focusTarget ? Math.max(0, 5 - diagonalDist(cell, intent.focusTarget)) * 1.2 : 0;
-      score -= game.terrain[cell.y][cell.x] === 'forest' ? 3 : 0;
-    }
-    if (type === 'guard') {
-      score += siteEntry && areAllies(siteEntry.owner, owner) && (siteEntry.kind === 'city' || siteEntry.kind.startsWith('barracks')) ? 8 : 0;
-    }
-    if (type === 'warship') {
-      score += siteEntry?.kind === 'shipyard' && !areAllies(siteEntry.owner, owner) ? 10 : 0;
-      const escort = game.units.find(entry => entry.owner === owner && entry.type === 'transport' && entry.cargo?.length && dist(entry, cell) <= 3);
-      if (escort) {
-        score += 4;
-        if (diagonalDist(cell, escort) === 1) {
-          score -= 3;
-        }
-      }
-      score += nearbyEnemies(cell, owner, 2) * 1.2;
-    }
-    if (type === 'transport') {
-      score -= nearbyEnemies(cell, owner, 2) * 4;
-      score += coastal ? 2 : 0;
-    }
-    if (type === 'engineer') {
-      score += coastal ? 5 : 0;
-      score -= nearbyEnemies(cell, owner, 1) * 6;
-    }
-    return score;
-  }
-
-  function unitRoleTargetBonus(unitEntry, enemy, intent) {
-    let score = 0;
-    if (unitEntry.type === 'spearman' && enemy.type === 'cavalry') {
-      score += 10;
-    }
-    if ((unitEntry.type === 'archer' || unitEntry.type === 'crossbow') && enemy.type === 'engineer') {
-      score += 8;
-    }
-    if (unitEntry.type === 'cavalry' && enemy.hp <= enemy.maxHp * 0.5) {
-      score += 8;
-    }
-    if (unitEntry.type === 'warship' && typeMeta(enemy.type).domain === 'sea') {
-      score += 7;
-    }
-    if (unitEntry.type === 'warship') {
-      const guardingTransport = game.units.some(entry => entry.owner === unitEntry.owner && entry.type === 'transport' && entry.cargo?.length && dist(entry, enemy) <= 3);
-      if (guardingTransport) {
-        score += 9;
-      }
-    }
-    if (unitEntry.type === 'guard' && intent?.assaultSite && dist(enemy, intent.assaultSite) <= 2) {
-      score += 4;
-    }
-    return score;
   }
 
   function chooseAction(owner, unitEntry, profile, intent = null) {
@@ -1893,81 +1660,10 @@ import { createTransport } from './game/transport.js';
     }
   }
 
-  function moveToward(unitEntry, target) {
-    const distanceField = buildDistanceField(unitEntry, target);
-    const cells = [...reachable(unitEntry).keys()].map(key => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y };
-    }).filter(cell => cell.x !== unitEntry.x || cell.y !== unitEntry.y);
-    if (!cells.length) {
-      return false;
-    }
-    cells.sort((a, b) => {
-      const da = distanceField?.get(cellKey(a.x, a.y)) ?? dist(a, target);
-      const db = distanceField?.get(cellKey(b.x, b.y)) ?? dist(b, target);
-      return da - db;
-    });
-    return moveUnit(unitEntry, cells[0].x, cells[0].y);
-  }
-
-  // Transports advance toward the landing but heavily avoid enemy attack range unless a warship escorts.
-  function moveTransportToward(transport, target) {
-    const owner = transport.owner;
-    const distanceField = buildDistanceField(transport, target);
-    const current = { x: transport.x, y: transport.y };
-    const currentDist = distanceField?.get(cellKey(current.x, current.y)) ?? dist(current, target);
-    const cells = [...reachable(transport).keys()].map(key => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y };
-    });
-    cells.push(current);
-    let best = current;
-    let bestScore = -Infinity;
-    for (const cell of cells) {
-      const cellDist = distanceField?.get(cellKey(cell.x, cell.y)) ?? dist(cell, target);
-      const progress = currentDist - cellDist;
-      const threat = enemyThreat(owner, cell.x, cell.y);
-      const escorted = game.units.some(entry => entry.owner === owner && entry.type === 'warship' && diagonalDist(entry, cell) <= 1);
-      const score = progress * 3 - threat * (escorted ? 0.4 : 2.4);
-      if (score > bestScore) {
-        bestScore = score;
-        best = cell;
-      }
-    }
-    if (best.x !== transport.x || best.y !== transport.y) {
-      return moveUnit(transport, best.x, best.y);
-    }
-    return false;
-  }
-
-  function bestLanding(owner, transport) {
-    const cells = [];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (isLandTile(x, y) && adjacent8(x, y).some(cell => isWaterTile(cell.x, cell.y))) {
-          cells.push({ x, y, score: strategicLandingScore(owner, { x, y }) });
-        }
-      }
-    }
-    cells.sort((a, b) => b.score - a.score || dist(transport, a) - dist(transport, b));
-    return cells[0] || null;
-  }
-
   function teamNeedsEngineer(owner) {
     const enemyCities = game.sites.filter(siteEntry => siteEntry.kind === 'city' && areEnemies(siteEntry.owner, owner));
     const ownedEngineers = game.units.filter(unitEntry => unitEntry.owner === owner && unitEntry.type === 'engineer').length;
     return !ownedEngineers || (!!enemyCities.length && !hasLandReachToEnemyCity(owner));
-  }
-
-  // Memoized per AI turn: whether any of owner's land units can reach an enemy city by land (expensive flood-fill).
-  function hasLandReachToEnemyCity(owner) {
-    const cached = landReachCache.get(owner);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const result = game.units.some(unitEntry => unitEntry.owner === owner && typeMeta(unitEntry.type).domain === 'land' && landUnitCanReachForeignCity(unitEntry));
-    landReachCache.set(owner, result);
-    return result;
   }
 
   function chooseTransportCargo(owner, budget, preferEngineer = false) {
@@ -2025,187 +1721,9 @@ import { createTransport } from './game/transport.js';
   }
 
   // Scripted test opponent: defends the upper half of the strait and deliberately leaves the lower half open.
-  function bridgeheadTryAttack(owner, unitEntry) {
-    if (unitEntry.hasAttacked) {
-      return false;
-    }
-    const targets = game.units.filter(entry => canAttack(unitEntry, entry));
-    if (!targets.length) {
-      return false;
-    }
-    targets.sort((a, b) => (a.hp - b.hp) || (typeMeta(b.type).level - typeMeta(a.type).level));
-    attack(unitEntry, targets[0]);
-    return true;
-  }
-
-  function bridgeheadDefendCell(owner, unitEntry) {
-    const midY = Math.floor(H * BRIDGEHEAD_DEFEND_FRACTION);
-    const enemies = game.units.filter(entry => areEnemies(entry.owner, owner));
-    const upperEnemies = enemies.filter(entry => entry.y < midY);
-    const focus = (upperEnemies.length ? upperEnemies : enemies).sort((a, b) => dist(a, unitEntry) - dist(b, unitEntry))[0];
-    const cells = [...reachable(unitEntry).keys()].map(key => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y };
-    });
-    cells.push({ x: unitEntry.x, y: unitEntry.y });
-    const zoneCells = cells.filter(cell => cell.y < midY);
-    const pool = zoneCells.length ? zoneCells : cells;
-    if (!focus) {
-      const anchorX = Math.floor(W / 2);
-      pool.sort((a, b) => Math.abs(a.x - anchorX) - Math.abs(b.x - anchorX) || a.y - b.y);
-      return pool[0];
-    }
-    pool.sort((a, b) => dist(a, focus) - dist(b, focus) || a.y - b.y);
-    return pool[0];
-  }
-
-  function bridgeheadProduce(owner) {
-    const prefer = ['guard', 'spearman', 'crossbow', 'archer', 'swordsman', 'militia'];
-    let built = 0;
-    for (const siteEntry of game.sites.filter(entry => entry.owner === owner && !getUnit(entry.x, entry.y))) {
-      if (built >= 2) {
-        break;
-      }
-      const types = buildableTypes(siteEntry);
-      const landChoice = prefer.find(type => types.includes(type) && game.goldByOwner[owner] >= typeMeta(type).cost);
-      const choice = landChoice || (types.includes('warship') && game.goldByOwner[owner] >= typeMeta('warship').cost ? 'warship' : null);
-      if (choice && buildAtSite(owner, siteEntry, choice)) {
-        built += 1;
-      }
-    }
-  }
-
-  async function bridgeheadTurn(owner) {
-    logAiDecision(owner, '桥头测试AI：死守上方 3/4，仅留最下 1/4 不设防。');
-    bridgeheadProduce(owner);
-    refresh();
-    await pause(aiStepDelay());
-    const units = game.units.filter(entry => entry.owner === owner);
-    for (const unitEntry of [...units]) {
-      if (!game.units.includes(unitEntry)) {
-        continue;
-      }
-      if (!bridgeheadTryAttack(owner, unitEntry)) {
-        const dest = bridgeheadDefendCell(owner, unitEntry);
-        if (dest && (dest.x !== unitEntry.x || dest.y !== unitEntry.y)) {
-          moveUnit(unitEntry, dest.x, dest.y);
-        }
-        bridgeheadTryAttack(owner, unitEntry);
-      }
-      refresh();
-      await pause(aiStepDelay());
-    }
-    if (!game.over) {
-      advanceTurn();
-    }
-  }
-
-  // Scripted naval test opponent: contests the upper sea lane, hunts transports, holds cities, leaves the lower sea open.
-  function navalTryAttack(owner, unitEntry) {
-    if (unitEntry.hasAttacked) {
-      return false;
-    }
-    const targets = game.units.filter(entry => canAttack(unitEntry, entry));
-    if (!targets.length) {
-      return false;
-    }
-    const priority = entry => (entry.type === 'transport' ? 2 : entry.type === 'warship' ? 1 : 0);
-    targets.sort((a, b) => priority(b) - priority(a) || (a.hp - b.hp));
-    attack(unitEntry, targets[0]);
-    return true;
-  }
-
-  function navalPatrolCell(owner, warship) {
-    const line = Math.floor(H * BRIDGEHEAD_DEFEND_FRACTION);
-    const enemies = game.units.filter(entry => areEnemies(entry.owner, owner));
-    const seaFocus = enemies.filter(entry => (typeMeta(entry.type).domain === 'sea' || entry.type === 'transport') && entry.y < line);
-    const focus = (seaFocus.length ? seaFocus : enemies).sort((a, b) => dist(a, warship) - dist(b, warship))[0];
-    const cells = [...reachable(warship).keys()].map(key => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y };
-    });
-    cells.push({ x: warship.x, y: warship.y });
-    const zone = cells.filter(cell => cell.y < line);
-    const pool = zone.length ? zone : cells;
-    if (!focus) {
-      const anchorX = Math.floor(W / 2);
-      pool.sort((a, b) => Math.abs(a.x - anchorX) - Math.abs(b.x - anchorX) || a.y - b.y);
-      return pool[0];
-    }
-    pool.sort((a, b) => dist(a, focus) - dist(b, focus) || a.y - b.y);
-    return pool[0];
-  }
-
-  function navalLandHoldCell(owner, unitEntry) {
-    const homes = game.sites.filter(entry => entry.owner === owner && (entry.kind === 'city' || entry.kind.startsWith('barracks')));
-    const cells = [...reachable(unitEntry).keys()].map(key => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y };
-    });
-    cells.push({ x: unitEntry.x, y: unitEntry.y });
-    const nearEnemy = game.units.filter(entry => areEnemies(entry.owner, owner) && typeMeta(entry.type).domain === 'land').sort((a, b) => dist(a, unitEntry) - dist(b, unitEntry))[0];
-    if (nearEnemy && dist(nearEnemy, unitEntry) <= 6) {
-      cells.sort((a, b) => dist(a, nearEnemy) - dist(b, nearEnemy));
-      return cells[0];
-    }
-    const home = homes.sort((a, b) => dist(a, unitEntry) - dist(b, unitEntry))[0];
-    if (home) {
-      cells.sort((a, b) => dist(a, home) - dist(b, home));
-      return cells[0];
-    }
-    return { x: unitEntry.x, y: unitEntry.y };
-  }
-
-  function navalProduce(owner) {
-    let built = 0;
-    for (const siteEntry of game.sites.filter(entry => entry.owner === owner && entry.kind === 'shipyard' && !getUnit(entry.x, entry.y))) {
-      if (built >= 2) {
-        break;
-      }
-      if (buildableTypes(siteEntry).includes('warship') && game.goldByOwner[owner] >= typeMeta('warship').cost && buildAtSite(owner, siteEntry, 'warship')) {
-        built += 1;
-      }
-    }
-    const prefer = ['guard', 'spearman', 'crossbow', 'archer'];
-    for (const siteEntry of game.sites.filter(entry => entry.owner === owner && entry.kind === 'city' && !getUnit(entry.x, entry.y))) {
-      if (built >= 3) {
-        break;
-      }
-      const type = prefer.find(entry => buildableTypes(siteEntry).includes(entry) && game.goldByOwner[owner] >= typeMeta(entry).cost);
-      if (type && buildAtSite(owner, siteEntry, type)) {
-        built += 1;
-      }
-    }
-  }
-
-  async function navalTurn(owner) {
-    logAiDecision(owner, '海防测试AI：制海守上方水道、专打运兵船，下方海道留口。');
-    navalProduce(owner);
-    refresh();
-    await pause(aiStepDelay());
-    const units = game.units.filter(entry => entry.owner === owner);
-    for (const unitEntry of [...units]) {
-      if (!game.units.includes(unitEntry)) {
-        continue;
-      }
-      const dest = typeMeta(unitEntry.type).domain === 'sea' ? navalPatrolCell(owner, unitEntry) : navalLandHoldCell(owner, unitEntry);
-      if (!navalTryAttack(owner, unitEntry)) {
-        if (dest && (dest.x !== unitEntry.x || dest.y !== unitEntry.y)) {
-          moveUnit(unitEntry, dest.x, dest.y);
-        }
-        navalTryAttack(owner, unitEntry);
-      }
-      refresh();
-      await pause(aiStepDelay());
-    }
-    if (!game.over) {
-      advanceTurn();
-    }
-  }
-
   async function aiTurn(owner) {
     const profile = game.aiProfiles[owner] || { diff: 'medium', agg: 'balanced' };
-    landReachCache.clear();
+    clearLandReachCache();
     if (DIFF[profile.diff]?.scripted) {
       if (DIFF[profile.diff].script === 'naval') {
         await navalTurn(owner);
@@ -2345,7 +1863,7 @@ import { createTransport } from './game/transport.js';
     cam.y = 0;
     zoom = 1;
     currentSaveKey = null;
-    distFieldCache.clear();
+    clearDistFieldCache();
     game = {
       terrain: terrainFor($('mapSelect').value, $('complexitySelect').value, W, H),
       units: [],
@@ -2560,8 +2078,8 @@ import { createTransport } from './game/transport.js';
     cam.x = 0;
     cam.y = 0;
     zoom = 1;
-    distFieldCache.clear();
-    landReachCache.clear();
+    clearDistFieldCache();
+    clearLandReachCache();
     game = payload.state;
     game.selected = null;
     game.pendingOrder = null;
