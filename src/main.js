@@ -21,6 +21,8 @@ import {
 } from './game/entities.js';
 import { createBuild } from './game/build.js';
 import { createTurn } from './game/turn.js';
+import { createWorldgen, pickSpacedCells, farthestPointSample, distributeCells } from './world/worldgen.js';
+import { createTransport } from './game/transport.js';
 
 (() => {
   'use strict';
@@ -630,6 +632,7 @@ import { createTurn } from './game/turn.js';
   // const，直接 TDZ 报错。combat.js 靠 rt.checkEnd 结束对局，这条链断了的表现是
   // 「战斗能打但对局永远不结束」。
   let turnApi;
+  let transportApi;
   const rt = {
     get game() { return game; },
     get W() { return W; },
@@ -639,9 +642,11 @@ import { createTurn } from './game/turn.js';
     get currentSaveKey() { return currentSaveKey; },
     set currentSaveKey(value) { currentSaveKey = value; },
     inBounds, adjacent4, adjacent8,
-    getUnit, getSite, isLandTile, isWaterTile,
-    areAllies, areEnemies, ownerName, ownerShort, teamOf, tierName,
-    supportSites,
+    unitsAt, captureSite,
+    getUnit, getSite, isLandTile, isWaterTile, isCoastalWater, isDeepWater,
+    areAllies, areEnemies, ownerName, ownerShort, teamOf, tierName, ownerOrder,
+    supportSites: unitEntry => transportApi.supportSites(unitEntry),
+    reachable: unitEntry => reachable(unitEntry),
     log, incrementStat, incrementStrat, recordStatSnapshot, grantKills,
     clearPendingOrder,
     checkEnd: () => turnApi.checkEnd(),
@@ -668,9 +673,18 @@ import { createTurn } from './game/turn.js';
   } = createBuild(rt);
   turnApi = createTurn(rt);
   const {
-    healOwner, grantIncome, teamStandings, resolveStalemate,
+    healOwner, grantIncome, decayTemporarySites, teamStandings, resolveStalemate,
     checkEnd, finish, endGameNeutral, sideLabel
   } = turnApi;
+  transportApi = createTransport(rt);
+  const {
+    moveUnit, canLoadTransport, loadTransport,
+    canUnloadTransport, unloadTransport, supportSites
+  } = transportApi;
+  const {
+    collectLandCells, makeCities, makeSpecialSites,
+    nearestCoastalWater, makeNavalSites, spawnLand, spawnSea
+  } = createWorldgen(rt);
 
   function log(text, kind = '') {
     game.logs.push({ text, kind });
@@ -755,65 +769,6 @@ import { createTurn } from './game/turn.js';
     checkEnd();
   }
 
-  function moveUnit(unitEntry, x, y) {
-    const cost = reachable(unitEntry).get(cellKey(x, y));
-    if (cost === undefined || unitEntry.hasAttacked) {
-      return false;
-    }
-    unitEntry.x = x;
-    unitEntry.y = y;
-    unitEntry.move -= cost;
-    unitEntry.acted = true;
-    captureSite(unitEntry);
-    return true;
-  }
-
-  function canLoadTransport(transport, passenger) {
-    return !!transport && !!passenger && !!typeMeta(transport.type).transport && typeMeta(passenger.type).domain === 'land' && transport.owner === passenger.owner && diagonalDist(transport, passenger) === 1 && transport.cargo.length < typeMeta(transport.type).transport;
-  }
-
-  function loadTransport(transport, passenger) {
-    if (!canLoadTransport(transport, passenger)) {
-      return false;
-    }
-    transport.cargo.push({ type: passenger.type, owner: passenger.owner, hp: passenger.hp, maxHp: passenger.maxHp, lastAttacked: passenger.lastAttacked });
-    game.units = game.units.filter(entry => entry !== passenger);
-    transport.acted = true;
-    log(`${typeMeta(passenger.type).name}登上了运兵船。`, 'system');
-    return true;
-  }
-
-  function canUnloadTransport(transport, x, y) {
-    if (!transport || !transport.cargo?.length || diagonalDist(transport, { x, y }) !== 1 || !isLandTile(x, y)) {
-      return false;
-    }
-    // Stacking is created only by unloading: target must be empty or already hold <3 friendly land units.
-    const occupants = unitsAt(x, y);
-    return occupants.length < MAX_STACK && occupants.every(entry => entry.owner === transport.owner && typeMeta(entry.type).domain === 'land');
-  }
-
-  function unloadTransport(transport, x, y) {
-    if (!canUnloadTransport(transport, x, y)) {
-      return false;
-    }
-    const payload = transport.cargo.shift();
-    const unitEntry = unit(payload.type, payload.owner, x, y);
-    unitEntry.hp = payload.hp;
-    unitEntry.maxHp = payload.maxHp;
-    unitEntry.move = 0;
-    unitEntry.acted = true;
-    unitEntry.hasAttacked = true;
-    unitEntry.lastAttacked = payload.lastAttacked;
-    game.units.push(unitEntry);
-    transport.acted = true;
-    if (unitEntry.type === 'engineer') {
-      incrementStrat(unitEntry.owner, 'engineerLandings');
-    }
-    log(`${typeMeta(unitEntry.type).name}完成登陆。`, 'system');
-    captureSite(unitEntry);
-    return true;
-  }
-
   function autoLoadAdjacent(transport) {
     const options = game.units.filter(entry => entry.owner === transport.owner && typeMeta(entry.type).domain === 'land' && diagonalDist(entry, transport) === 1);
     options.sort((a, b) => typeMeta(b.type).level - typeMeta(a.type).level || b.hp - a.hp);
@@ -840,31 +795,6 @@ import { createTurn } from './game/turn.js';
     }
     cells.sort((a, b) => strategicLandingScore(transport.owner, b) - strategicLandingScore(transport.owner, a));
     return unloadTransport(transport, cells[0].x, cells[0].y);
-  }
-
-  function supportSites(unitEntry) {
-    return game.sites.filter(siteEntry => areAllies(siteEntry.owner, unitEntry.owner) && ((((siteEntry.kind === 'city' || siteEntry.kind === 'camp' || siteEntry.kind === 'barracksSmall' || siteEntry.kind === 'barracksLarge') && typeMeta(unitEntry.type).domain === 'land')) || ((siteEntry.kind === 'shipyard' || siteEntry.kind === 'fortress') && typeMeta(unitEntry.type).domain === 'sea')));
-  }
-
-  function decayTemporarySites(owner) {
-    const expired = [];
-    for (const siteEntry of game.sites) {
-      if (siteEntry.kind !== 'camp' || siteEntry.owner !== owner) {
-        continue;
-      }
-      siteEntry.duration -= 1;
-      if (siteEntry.duration <= 0) {
-        expired.push(siteEntry);
-      }
-    }
-    if (!expired.length) {
-      return;
-    }
-    game.sites = game.sites.filter(siteEntry => !expired.includes(siteEntry));
-    if (expired.includes(game.selected?.ref)) {
-      game.selected = null;
-    }
-    expired.forEach(siteEntry => log(`${siteEntry.name}补给耗尽，已自行拆除。`, 'warning'));
   }
 
   function beginTurn(owner, initial) {
@@ -1411,263 +1341,6 @@ import { createTurn } from './game/turn.js';
     advanceTurn();
   }
 
-  function collectLandCells() {
-    const cells = [];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (game.terrain[y][x] !== 'water' && game.terrain[y][x] !== 'mountain') {
-          cells.push({ x, y });
-        }
-      }
-    }
-    return cells;
-  }
-
-  function pickSpacedCells(pool, count, minGap) {
-    const picks = [];
-    for (const cell of shuffle(pool)) {
-      if (picks.length >= count) {
-        break;
-      }
-      if (picks.every(other => dist(cell, other) >= minGap)) {
-        picks.push(cell);
-      }
-    }
-    return picks;
-  }
-
-  // Even (blue-noise) placement: repeatedly take the cell farthest from all already-chosen cells.
-  function farthestPointSample(pool, count, usedKeys) {
-    if (count <= 0 || !pool.length) {
-      return [];
-    }
-    const avail = usedKeys ? pool.filter(cell => !usedKeys.has(cellKey(cell.x, cell.y))) : pool.slice();
-    if (!avail.length) {
-      return [];
-    }
-    const minD = new Array(avail.length).fill(Infinity);
-    const picks = [];
-    let idx = Math.floor(Math.random() * avail.length);
-    for (let k = 0; k < count && k < avail.length; k++) {
-      const chosen = avail[idx];
-      picks.push(chosen);
-      let farIdx = -1;
-      let farDist = -1;
-      for (let i = 0; i < avail.length; i++) {
-        const d = dist(avail[i], chosen);
-        if (d < minD[i]) {
-          minD[i] = d;
-        }
-        if (minD[i] > farDist) {
-          farDist = minD[i];
-          farIdx = i;
-        }
-      }
-      idx = farIdx;
-    }
-    return picks;
-  }
-
-  // Distribute sites by the 城池分布 slider: 0 = perfectly even, 100 = most points clustered around random centers.
-  function distributeCells(pool, count, spread) {
-    if (!pool.length || count <= 0) {
-      return [];
-    }
-    count = Math.min(count, pool.length);
-    const clusterFactor = clamp((spread ?? 50) / 100, 0, 1);
-    const clusterShare = clusterFactor * (0.5 + Math.random() * 0.4);
-    const clusterCount = Math.min(count, Math.round(clusterShare * count));
-    const uniformCount = count - clusterCount;
-    const used = new Set();
-    const picks = [];
-    for (const cell of farthestPointSample(pool, uniformCount, used)) {
-      picks.push(cell);
-      used.add(cellKey(cell.x, cell.y));
-    }
-    if (clusterCount > 0) {
-      const centerN = clamp(1 + Math.floor(Math.random() * 4), 1, Math.max(1, Math.ceil(clusterCount / 2)));
-      const centers = Array.from({ length: centerN }, () => pool[Math.floor(Math.random() * pool.length)]);
-      for (let i = 0; i < clusterCount; i++) {
-        const center = centers[i % centers.length];
-        let best = null;
-        let bestD = Infinity;
-        const tries = Math.min(pool.length, 200);
-        for (let t = 0; t < tries; t++) {
-          const cell = pool[Math.floor(Math.random() * pool.length)];
-          if (used.has(cellKey(cell.x, cell.y))) {
-            continue;
-          }
-          const d = dist(cell, center) + Math.random() * 3;
-          if (d < bestD) {
-            bestD = d;
-            best = cell;
-          }
-        }
-        if (best) {
-          picks.push(best);
-          used.add(cellKey(best.x, best.y));
-        }
-      }
-    }
-    return picks;
-  }
-
-  function makeCities(aiCount, sizeKey, spread) {
-    const cells = collectLandCells();
-    const owners = ['player', ...Array.from({ length: aiCount }, (_, index) => `ai${index}`)];
-    // Spread owner homes across the whole map (scaled to area & player count) so factions don't cluster in one corner.
-    let ownerGap = clamp(Math.round(Math.sqrt(2 * W * H / owners.length) * 0.72), 4, Math.floor((W + H) / 2));
-    let ownerCells = pickSpacedCells(cells, owners.length, ownerGap);
-    while (ownerCells.length < owners.length && ownerGap > 3) {
-      ownerGap = Math.max(3, Math.floor(ownerGap * 0.75));
-      ownerCells = pickSpacedCells(cells, owners.length, ownerGap);
-    }
-    if (ownerCells.length < owners.length) {
-      const chosen = new Set(ownerCells.map(cell => cellKey(cell.x, cell.y)));
-      for (const cell of shuffle(cells)) {
-        if (ownerCells.length >= owners.length) {
-          break;
-        }
-        const key = cellKey(cell.x, cell.y);
-        if (!chosen.has(key)) {
-          chosen.add(key);
-          ownerCells.push(cell);
-        }
-      }
-    }
-    // Neutral cities fill out the rest; total scales with map size and the site-density setting.
-    const density = game.settings?.siteDensity ?? 1;
-    const baseTotal = Math.max(6, aiCount + 4) + ({ small: 1, medium: 4, large: 8, huge: 12, giant: 18, colossal: 26 }[sizeKey] || 0);
-    const neutralCount = Math.min(cells.length - owners.length, Math.max(0, Math.round((baseTotal - owners.length) * density)));
-    const usedKeys = new Set(ownerCells.map(cell => cellKey(cell.x, cell.y)));
-    const neutralPool = cells.filter(cell => !usedKeys.has(cellKey(cell.x, cell.y)));
-    const neutralCells = distributeCells(neutralPool, neutralCount, spread);
-    const entries = [
-      ...ownerCells.map((cell, index) => ({ cell, owner: owners[index] })),
-      ...neutralCells.map(cell => ({ cell, owner: 'neutral' }))
-    ];
-    return entries.map((entry, index) => {
-      const tier = Math.random() < 0.62 ? 1 : Math.random() < 0.84 ? 2 : 3;
-      return site('city', entry.owner, entry.cell.x, entry.cell.y, CITY_NAMES[index % CITY_NAMES.length], tier, CITY_INCOME_BY_TIER[tier]);
-    });
-  }
-
-  function makeSpecialSites() {
-    const used = new Set(game.sites.map(entry => cellKey(entry.x, entry.y)));
-    const land = collectLandCells().filter(cell => !used.has(cellKey(cell.x, cell.y)));
-    const density = game.settings?.siteDensity ?? 1;
-    const spread = game.settings?.spread ?? 50;
-    const oilKinds = ['oilSmall', 'oilMedium', 'oilLarge'];
-    const oilCount = clamp(Math.round(land.length / 120 * density), 2, 10);
-    const oilCells = distributeCells(land, oilCount, spread);
-    const specials = [];
-    oilCells.forEach((cell, index) => {
-      const kind = oilKinds[index % oilKinds.length];
-      used.add(cellKey(cell.x, cell.y));
-      specials.push(site(kind, 'neutral', cell.x, cell.y, OIL_NAMES[index % OIL_NAMES.length], 1, siteMeta(kind).income));
-    });
-
-    const barracksPool = land.filter(cell => !used.has(cellKey(cell.x, cell.y)));
-    const barracksCount = clamp(Math.round(land.length / 150 * density), 2, 8);
-    distributeCells(barracksPool, barracksCount, spread).forEach((cell, index) => {
-      const kind = index % 2 === 0 ? 'barracksLarge' : 'barracksSmall';
-      used.add(cellKey(cell.x, cell.y));
-      specials.push(site(kind, 'neutral', cell.x, cell.y, BARRACK_NAMES[index % BARRACK_NAMES.length], 1, 0));
-    });
-    return specials;
-  }
-
-  function nearestCoastalWater(homes, used) {
-    const candidates = [];
-    for (const home of homes) {
-      for (let y = Math.max(0, home.y - 8); y <= Math.min(H - 1, home.y + 8); y++) {
-        for (let x = Math.max(0, home.x - 8); x <= Math.min(W - 1, home.x + 8); x++) {
-          if (!used.has(cellKey(x, y)) && isCoastalWater(x, y)) {
-            candidates.push({ x, y, score: dist(home, { x, y }) });
-          }
-        }
-      }
-    }
-    candidates.sort((a, b) => a.score - b.score);
-    return candidates[0] || null;
-  }
-
-  function makeNavalSites() {
-    const used = new Set(game.sites.map(entry => cellKey(entry.x, entry.y)));
-    const sites = [];
-    for (const owner of ownerOrder()) {
-      const homes = game.sites.filter(entry => entry.owner === owner && entry.kind === 'city');
-      const cell = nearestCoastalWater(homes, used);
-      if (!cell) {
-        continue;
-      }
-      used.add(cellKey(cell.x, cell.y));
-      sites.push(site('shipyard', owner, cell.x, cell.y, PORT_NAMES[sites.length % PORT_NAMES.length], Math.random() < 0.25 ? 2 : 1, 8 + rnd(3)));
-    }
-    const coastal = [];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (!used.has(cellKey(x, y)) && isCoastalWater(x, y)) {
-          coastal.push({ x, y });
-        }
-      }
-    }
-    const spread = game.settings?.spread ?? 50;
-    const density = game.settings?.siteDensity ?? 1;
-    for (const cell of distributeCells(coastal, clamp(Math.round(coastal.length / 60 * density), 1, 8), spread)) {
-      used.add(cellKey(cell.x, cell.y));
-      sites.push(site('shipyard', 'neutral', cell.x, cell.y, PORT_NAMES[sites.length % PORT_NAMES.length], 1, 7 + rnd(3)));
-    }
-    const deep = [];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (!used.has(cellKey(x, y)) && isDeepWater(x, y)) {
-          deep.push({ x, y });
-        }
-      }
-    }
-    for (const cell of distributeCells(deep, clamp(Math.round(deep.length / 90 * density), 0, 6), spread)) {
-      sites.push(site('fortress', 'neutral', cell.x, cell.y, FORT_NAMES[sites.length % FORT_NAMES.length], 1, 5 + rnd(2)));
-    }
-    return sites;
-  }
-
-  function spawnLand(owner, homes, count, used, deploy) {
-    const bag = ['militia', 'scout', 'spearman', 'swordsman', 'archer', 'crossbow', 'cavalry', 'guard'];
-    const centerX = homes.reduce((sum, entry) => sum + entry.x, 0) / homes.length;
-    const centerY = homes.reduce((sum, entry) => sum + entry.y, 0) / homes.length;
-    const radius = deploy === 'tight' ? 3 : deploy === 'loose' ? 6 : deploy === 'veryLoose' ? 10 : Math.max(W, H);
-    for (let i = 0; i < count; i++) {
-      const cells = [];
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          if (isLandTile(x, y) && !used.has(cellKey(x, y)) && Math.hypot(x - centerX, y - centerY) <= radius) {
-            cells.push({ x, y });
-          }
-        }
-      }
-      if (!cells.length) {
-        continue;
-      }
-      cells.sort((a, b) => Math.hypot(a.x - centerX, a.y - centerY) - Math.hypot(b.x - centerX, b.y - centerY));
-      const pick = deploy === 'random' ? cells[rnd(cells.length)] : cells[rnd(Math.max(1, Math.min(cells.length, Math.ceil(cells.length * 0.5))))];
-      used.add(cellKey(pick.x, pick.y));
-      game.units.push(unit(bag[rnd(bag.length)], owner, pick.x, pick.y));
-    }
-  }
-
-  function spawnSea(owner, count) {
-    const ports = game.sites.filter(entry => entry.owner === owner && entry.kind === 'shipyard');
-    let spawned = 0;
-    for (const port of ports) {
-      if (spawned >= count || getUnit(port.x, port.y)) {
-        continue;
-      }
-      game.units.push(unit(spawned === 0 ? 'warship' : 'transport', owner, port.x, port.y));
-      spawned += 1;
-    }
-    return spawned;
-  }
 
   function bestSupport(owner, unitEntry) {
     const supports = supportSites(unitEntry);

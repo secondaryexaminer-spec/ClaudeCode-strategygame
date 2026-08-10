@@ -49,6 +49,28 @@ export function createTurn(rt) {
     }
   }
 
+  // 临时营地按回合倒计时，归零后自行拆除。回合开始时由 beginTurn 调用。
+  function decayTemporarySites(owner) {
+    const expired = [];
+    for (const siteEntry of rt.game.sites) {
+      if (siteEntry.kind !== 'camp' || siteEntry.owner !== owner) {
+        continue;
+      }
+      siteEntry.duration -= 1;
+      if (siteEntry.duration <= 0) {
+        expired.push(siteEntry);
+      }
+    }
+    if (!expired.length) {
+      return;
+    }
+    rt.game.sites = rt.game.sites.filter(siteEntry => !expired.includes(siteEntry));
+    if (expired.includes(rt.game.selected?.ref)) {
+      rt.game.selected = null;
+    }
+    expired.forEach(siteEntry => rt.log(`${siteEntry.name}补给耗尽，已自行拆除。`, 'warning'));
+  }
+
   function teamStandings() {
     const standings = {};
     // 外层括号是语义必需的 —— ensure 要返回那个 bucket，去掉就变成返回 undefined。
@@ -215,5 +237,5 @@ export function createTurn(rt) {
     return rt.game.side === 'player' ? `你的回合 · ${rt.teamOf('player')}组` : `${rt.ownerShort(rt.game.side)}行动中 · ${rt.teamOf(rt.game.side)}组`;
   }
 
-  return { healOwner, grantIncome, teamStandings, resolveStalemate, checkEnd, finish, endGameNeutral, sideLabel };
+  return { healOwner, grantIncome, decayTemporarySites, teamStandings, resolveStalemate, checkEnd, finish, endGameNeutral, sideLabel };
 }
