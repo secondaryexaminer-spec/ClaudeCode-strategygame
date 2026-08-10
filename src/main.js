@@ -19,6 +19,7 @@ import {
   cargoOptionTypes, normalizeCargoTypes, transportCost, cargoLabel, describeCargo,
   rankFromKills, effectiveMove, healMultiplier
 } from './game/entities.js';
+import { createBuild } from './game/build.js';
 
 (() => {
   'use strict';
@@ -538,70 +539,6 @@ import {
     return game ? game.ownerOrder : [];
   }
 
-  function terrainCellCounts() {
-    if (game.__cellCounts) {
-      return game.__cellCounts;
-    }
-    let land = 0;
-    let sea = 0;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (game.terrain[y][x] === 'water') {
-          sea += 1;
-        } else if (game.terrain[y][x] !== 'mountain') {
-          land += 1;
-        }
-      }
-    }
-    game.__cellCounts = { land, sea };
-    return game.__cellCounts;
-  }
-
-  function unitCapFor(domain) {
-    const counts = terrainCellCounts();
-    const participants = Math.max(1, game.ownerOrder.length);
-    const cells = domain === 'sea' ? counts.sea : counts.land;
-    return Math.max(1, Math.floor(cells / (participants + 1)));
-  }
-
-  function ownedUnitCount(owner, domain) {
-    return game.units.filter(entry => entry.owner === owner && typeMeta(entry.type).domain === domain).length;
-  }
-
-  function atUnitCap(owner, domain) {
-    return ownedUnitCount(owner, domain) >= unitCapFor(domain);
-  }
-
-  function campCount(owner) {
-    return game.sites.filter(entry => entry.kind === 'camp' && entry.owner === owner).length;
-  }
-
-  function unitBuildCost(unitEntry) {
-    if (unitEntry.type === 'transport') {
-      return transportCost((unitEntry.cargo || []).map(payload => payload.type));
-    }
-    return typeMeta(unitEntry.type).cost;
-  }
-
-  function sellRefund(unitEntry) {
-    return Math.floor(unitBuildCost(unitEntry) / 2);
-  }
-
-  function sellUnit(owner, unitEntry) {
-    if (!unitEntry || unitEntry.owner !== owner || game.side !== owner || game.over) {
-      return false;
-    }
-    const refund = sellRefund(unitEntry);
-    game.goldByOwner[owner] += refund;
-    game.units = game.units.filter(entry => entry !== unitEntry);
-    incrementStrat(owner, 'sells');
-    if (game.selected?.ref === unitEntry) {
-      game.selected = null;
-    }
-    log(`${ownerName(owner)}变卖了${typeMeta(unitEntry.type).name}，回收 ${refund} 🪙。`, 'gold');
-    return true;
-  }
-
   function forceCrowding(owner) {
     const units = game.units.filter(entry => entry.owner === owner);
     if (!units.length) {
@@ -694,13 +631,21 @@ import {
     get currentSaveKey() { return currentSaveKey; },
     set currentSaveKey(value) { currentSaveKey = value; },
     inBounds, adjacent4, adjacent8,
-    getUnit, getSite,
-    areAllies, areEnemies, ownerName,
-    log, incrementStat, recordStatSnapshot, grantKills, checkEnd,
+    getUnit, getSite, isLandTile, isWaterTile,
+    areAllies, areEnemies, ownerName, tierName,
+    log, incrementStat, incrementStrat, recordStatSnapshot, grantKills, checkEnd,
+    clearPendingOrder,
     loadPayload: payload => loadPayload(payload)
   };
 
   const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
+  const {
+    terrainCellCounts, unitCapFor, ownedUnitCount, atUnitCap, campCount,
+    unitBuildCost, sellRefund, sellUnit,
+    buildableTypes, siteUpgradeCost, buildBudgetLeft, recordBuild, buildAtSite,
+    upgradeSite, fullHealSite, aiRepair, consumeAction, engineerBuildCells,
+    canBuildCamp, canEngineerLaunch, buildCamp, engineerLaunch
+  } = createBuild(rt);
 
   function log(text, kind = '') {
     game.logs.push({ text, kind });
@@ -1191,148 +1136,6 @@ import {
       return `观战中 · ${ownerShort(game.side)}行动中 · ${teamOf(game.side)}组`;
     }
     return game.side === 'player' ? `你的回合 · ${teamOf('player')}组` : `${ownerShort(game.side)}行动中 · ${teamOf(game.side)}组`;
-  }
-
-  function buildableTypes(siteEntry) {
-    const domain = siteMeta(siteEntry.kind).domain;
-    if (!domain) {
-      return [];
-    }
-    return Object.keys(TYPES).filter(type => typeMeta(type).domain === domain && typeMeta(type).level <= siteEntry.tier);
-  }
-
-  function siteUpgradeCost(siteEntry) {
-    return siteMeta(siteEntry.kind).upgradeCosts[siteEntry.tier] || 0;
-  }
-
-  function buildBudgetLeft(owner) {
-    return (game.settings?.buildCap ?? 100) - (game.buildsThisTurn?.[owner] || 0);
-  }
-
-  function recordBuild(owner, count) {
-    game.buildsThisTurn = game.buildsThisTurn || {};
-    game.buildsThisTurn[owner] = (game.buildsThisTurn[owner] || 0) + count;
-  }
-
-  function buildAtSite(owner, siteEntry, type, options = {}) {
-    const cargoTypes = type === 'transport' ? normalizeCargoTypes(options.cargoTypes) : [];
-    const totalCost = type === 'transport' ? transportCost(cargoTypes) : typeMeta(type).cost;
-    const builtUnits = type === 'transport' ? 1 + cargoTypes.length : 1;
-    if (!siteEntry || siteEntry.owner !== owner || !buildableTypes(siteEntry).includes(type) || getUnit(siteEntry.x, siteEntry.y) || game.goldByOwner[owner] < totalCost) {
-      return false;
-    }
-    if (atUnitCap(owner, typeMeta(type).domain) || buildBudgetLeft(owner) < builtUnits) {
-      return false;
-    }
-    recordBuild(owner, builtUnits);
-    game.goldByOwner[owner] -= totalCost;
-    if (type === 'transport') {
-      game.units.push(createLoadedTransport(owner, siteEntry.x, siteEntry.y, cargoTypes));
-      log(`${ownerName(owner)}在${siteEntry.name}下水了运兵船，预载 ${describeCargo(cargoTypes)}。`, 'system');
-      incrementStat('produced', owner, 1 + cargoTypes.length);
-    } else {
-      game.units.push(unit(type, owner, siteEntry.x, siteEntry.y));
-      log(`${ownerName(owner)}在${siteEntry.name}部署了${typeMeta(type).name}。`, 'system');
-      incrementStat('produced', owner, 1);
-    }
-    recordStatSnapshot('build');
-    return true;
-  }
-
-  function upgradeSite(owner, siteEntry) {
-    const cost = siteUpgradeCost(siteEntry);
-    if (!siteEntry || siteEntry.owner !== owner || siteEntry.tier >= siteMeta(siteEntry.kind).maxTier || game.goldByOwner[owner] < cost) {
-      return false;
-    }
-    game.goldByOwner[owner] -= cost;
-    siteEntry.tier += 1;
-    siteEntry.income += siteEntry.kind === 'city' ? 3 : 2;
-    log(`${siteEntry.name}升级为${tierName(siteEntry.tier)}${siteMeta(siteEntry.kind).name}。`, 'system');
-    return true;
-  }
-
-  function fullHealSite(owner, siteEntry) {
-    const occupant = getUnit(siteEntry.x, siteEntry.y);
-    const cost = siteEntry.kind === 'city' || siteEntry.kind === 'camp' ? 5 : siteEntry.kind === 'shipyard' ? 6 : 7;
-    if (!siteEntry || siteEntry.owner !== owner || !occupant || occupant.owner !== owner || game.goldByOwner[owner] < cost) {
-      return false;
-    }
-    game.goldByOwner[owner] -= cost;
-    occupant.hp = occupant.maxHp;
-    log(`${siteEntry.name}花费${cost}金币完成驻军修整。`, 'gold');
-    return true;
-  }
-
-  function aiRepair(owner) {
-    for (const siteEntry of game.sites.filter(entry => entry.owner === owner)) {
-      const occupant = getUnit(siteEntry.x, siteEntry.y);
-      if (!occupant || occupant.owner !== owner || occupant.hp >= occupant.maxHp) {
-        continue;
-      }
-      const cost = siteEntry.kind === 'city' || siteEntry.kind === 'camp' ? 5 : siteEntry.kind === 'shipyard' ? 6 : 7;
-      if (occupant.hp <= occupant.maxHp * 0.45 && game.goldByOwner[owner] >= cost) {
-        game.goldByOwner[owner] -= cost;
-        occupant.hp = occupant.maxHp;
-        log(`${ownerName(owner)}在${siteEntry.name}完成驻军修整。`, 'system');
-      }
-    }
-  }
-
-  function consumeAction(unitEntry) {
-    unitEntry.move = 0;
-    unitEntry.acted = true;
-    unitEntry.hasAttacked = true;
-  }
-
-  function engineerBuildCells(unitEntry) {
-    return adjacent8(unitEntry.x, unitEntry.y).filter(cell => isWaterTile(cell.x, cell.y) && !getUnit(cell.x, cell.y));
-  }
-
-  function canBuildCamp(unitEntry) {
-    return !!unitEntry && unitEntry.type === 'engineer' && unitEntry.owner === game.side && !unitEntry.acted && isLandTile(unitEntry.x, unitEntry.y) && !getSite(unitEntry.x, unitEntry.y) && game.goldByOwner[unitEntry.owner] >= CAMP_COST && campCount(unitEntry.owner) < MAX_CAMPS_PER_SIDE;
-  }
-
-  function canEngineerLaunch(unitEntry, type, cell, cargoTypes = []) {
-    const totalCost = type === 'transport' ? transportCost(cargoTypes) : typeMeta(type).cost;
-    return !!unitEntry && unitEntry.type === 'engineer' && unitEntry.owner === game.side && !unitEntry.acted && !!cell && diagonalDist(unitEntry, cell) === 1 && isWaterTile(cell.x, cell.y) && !getUnit(cell.x, cell.y) && game.goldByOwner[unitEntry.owner] >= totalCost;
-  }
-
-  function buildCamp(unitEntry) {
-    if (!canBuildCamp(unitEntry) || campCount(unitEntry.owner) >= MAX_CAMPS_PER_SIDE) {
-      return false;
-    }
-    game.goldByOwner[unitEntry.owner] -= CAMP_COST;
-    game.sites.push(createCamp(unitEntry.owner, unitEntry.x, unitEntry.y));
-    consumeAction(unitEntry);
-    clearPendingOrder();
-    incrementStat('captures', unitEntry.owner, 1);
-    incrementStrat(unitEntry.owner, 'campsBuilt');
-    recordStatSnapshot('camp');
-    log(`${ownerName(unitEntry.owner)}的工程师建立了临时营地，可维持 ${CAMP_DURATION} 回合。`, 'system');
-    return true;
-  }
-
-  function engineerLaunch(unitEntry, type, cell, cargoTypes = []) {
-    const totalCost = type === 'transport' ? transportCost(cargoTypes) : typeMeta(type).cost;
-    const builtUnits = type === 'transport' ? 1 + cargoTypes.length : 1;
-    if (!canEngineerLaunch(unitEntry, type, cell, cargoTypes)) {
-      return false;
-    }
-    if (atUnitCap(unitEntry.owner, typeMeta(type).domain) || buildBudgetLeft(unitEntry.owner) < builtUnits) {
-      return false;
-    }
-    recordBuild(unitEntry.owner, builtUnits);
-    game.goldByOwner[unitEntry.owner] -= totalCost;
-    game.units.push(type === 'transport' ? createLoadedTransport(unitEntry.owner, cell.x, cell.y, cargoTypes) : unit(type, unitEntry.owner, cell.x, cell.y));
-    consumeAction(unitEntry);
-    clearPendingOrder();
-    incrementStat('produced', unitEntry.owner, type === 'transport' ? 1 + cargoTypes.length : 1);
-    if (type === 'transport') {
-      incrementStrat(unitEntry.owner, 'transportLaunches');
-    }
-    recordStatSnapshot('engineer-build');
-    log(`${ownerName(unitEntry.owner)}的工程师在海边建造了${type === 'transport' ? `运兵船（${describeCargo(cargoTypes)}）` : typeMeta(type).name}。`, 'system');
-    return true;
   }
 
   function drawSelection(x, y, color) {
