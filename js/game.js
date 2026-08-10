@@ -354,6 +354,142 @@
     return terrain;
   }
 
+  // src/game/movement.js
+  function createMovement(rt) {
+    function movementCost(unitEntry, x, y) {
+      return typeMeta(unitEntry.type).domain === "sea" ? 1 : TERRAIN[rt.game.terrain[y][x]].cost;
+    }
+    function passable(unitEntry, x, y) {
+      if (!rt.inBounds(x, y) || rt.getUnit(x, y)) {
+        return false;
+      }
+      const domain = typeMeta(unitEntry.type).domain;
+      if (domain === "sea") {
+        return rt.game.terrain[y][x] === "water";
+      }
+      return rt.game.terrain[y][x] !== "water" && rt.game.terrain[y][x] !== "mountain";
+    }
+    function movementNeighbors(unitEntry, currentCost, x, y) {
+      return rt.adjacent8(x, y);
+    }
+    function reachable(unitEntry) {
+      const seen = /* @__PURE__ */ new Map([[cellKey(unitEntry.x, unitEntry.y), 0]]);
+      const queue = [{ x: unitEntry.x, y: unitEntry.y, cost: 0 }];
+      while (queue.length) {
+        const current = queue.shift();
+        for (const next of movementNeighbors(unitEntry, current.cost, current.x, current.y)) {
+          if (!passable(unitEntry, next.x, next.y)) {
+            continue;
+          }
+          const step = movementCost(unitEntry, next.x, next.y);
+          const diagonal = next.x !== current.x && next.y !== current.y;
+          const cost = current.cost + (diagonal ? step * Math.SQRT2 : step);
+          const key = cellKey(next.x, next.y);
+          if (cost > unitEntry.move) {
+            continue;
+          }
+          if (!seen.has(key) || cost < seen.get(key)) {
+            seen.set(key, cost);
+            queue.push({ x: next.x, y: next.y, cost });
+          }
+        }
+      }
+      return seen;
+    }
+    return { movementCost, passable, movementNeighbors, reachable };
+  }
+
+  // src/game/combat.js
+  function createCombat(rt) {
+    function siteBonus(siteEntry, unitEntry, mode) {
+      if (!siteEntry || !rt.areAllies(siteEntry.owner, unitEntry.owner)) {
+        return 0;
+      }
+      const domain = typeMeta(unitEntry.type).domain;
+      if ((siteEntry.kind === "city" || siteEntry.kind === "camp" || siteEntry.kind === "barracksSmall" || siteEntry.kind === "barracksLarge") && domain === "land") {
+        const supportTier = siteMeta(siteEntry.kind).supportTier || siteEntry.tier;
+        return mode === "attack" ? supportTier : supportTier * 2;
+      }
+      if (siteEntry.kind === "shipyard" && domain === "sea") {
+        return mode === "attack" ? siteEntry.tier : siteEntry.tier + 1;
+      }
+      if (siteEntry.kind === "fortress" && domain === "sea") {
+        return mode === "attack" ? 1 : 3;
+      }
+      return 0;
+    }
+    function matchupBonus(attacker, defender) {
+      const bonusVs = typeMeta(attacker.type).bonusVs || {};
+      return bonusVs[defender.type] || 0;
+    }
+    function computeDamage(attacker, defender, fromCell, toCell, isCounter, deterministic) {
+      const attackMeta = typeMeta(attacker.type);
+      const defenseMeta = typeMeta(defender.type);
+      const attackSite = rt.getSite(fromCell.x, fromCell.y);
+      const defenseSite = rt.getSite(toCell.x, toCell.y);
+      const terrainDef = TERRAIN[rt.game.terrain[toCell.y][toCell.x]].def;
+      const attackBuff = siteBonus(attackSite, attacker, "attack") + matchupBonus(attacker, defender);
+      const defenseBuff = siteBonus(defenseSite, defender, "defense") + terrainDef;
+      const attackHpFactor = 0.55 + attacker.hp / attacker.maxHp * 0.65;
+      const defendHpFactor = 0.55 + defender.hp / defender.maxHp * 0.55;
+      const charge = attackMeta.charge && !isCounter && diagonalDist(fromCell, toCell) === 1 && attacker.move === attacker.maxMove ? attackMeta.charge : 0;
+      const base = (attackMeta.atk + attackBuff + attacker.rank) * attackHpFactor + charge;
+      const shield = (defenseMeta.def + defenseBuff) * defendHpFactor;
+      const variance = deterministic ? 1 : rnd(3);
+      return clamp(Math.round(base - shield * 0.58 + 2 + variance), 1, defender.hp);
+    }
+    function previewCombat(attacker, defender, fromCell, deterministic) {
+      const attackFrom = fromCell || { x: attacker.x, y: attacker.y };
+      const damage = computeDamage(attacker, defender, attackFrom, { x: defender.x, y: defender.y }, false, deterministic);
+      const targetLeft = Math.max(0, defender.hp - damage);
+      let counter = 0;
+      if (targetLeft > 0 && inUnitRange(typeMeta(defender.type).range, { x: defender.x, y: defender.y }, attackFrom)) {
+        counter = clamp(Math.round(computeDamage(defender, attacker, { x: defender.x, y: defender.y }, attackFrom, true, deterministic) * 0.8), 0, attacker.hp);
+      }
+      return { damage, counter, kill: targetLeft <= 0, targetLeft, selfLeft: Math.max(0, attacker.hp - counter) };
+    }
+    function canAttack(attacker, defender, fromCell = { x: attacker.x, y: attacker.y }) {
+      return !!attacker && !!defender && attacker.owner === rt.game.side && !attacker.hasAttacked && rt.areEnemies(attacker.owner, defender.owner) && inUnitRange(typeMeta(attacker.type).range, fromCell, defender);
+    }
+    function removeUnit(unitEntry) {
+      if (unitEntry.cargo?.length) {
+        rt.log(`${typeMeta(unitEntry.type).name}被击沉，船上搭载单位全部损失。`, "warning");
+      }
+      rt.incrementStat("losses", unitEntry.owner, 1 + (unitEntry.cargo?.length || 0));
+      rt.game.units = rt.game.units.filter((entry) => entry !== unitEntry);
+      rt.recordStatSnapshot("loss");
+      if (!rt.game.over) {
+        rt.checkEnd();
+      }
+    }
+    function attack(attacker, defender) {
+      const result = previewCombat(attacker, defender, { x: attacker.x, y: attacker.y }, false);
+      defender.hp -= result.damage;
+      defender.lastAttacked = true;
+      attacker.move = 0;
+      attacker.hasAttacked = true;
+      attacker.acted = true;
+      rt.log(`${rt.ownerName(attacker.owner)}的${typeMeta(attacker.type).name}攻击${rt.ownerName(defender.owner)}的${typeMeta(defender.type).name}，造成 ${result.damage} 点伤害。`, "battle");
+      if (defender.hp <= 0) {
+        rt.incrementStat("kills", attacker.owner, 1 + (defender.cargo?.length || 0));
+        rt.grantKills(attacker, 1 + (defender.cargo?.length || 0));
+        removeUnit(defender);
+        rt.log(`${typeMeta(defender.type).name}被消灭。`, "battle");
+      } else if (result.counter > 0) {
+        attacker.hp -= result.counter;
+        rt.log(`${typeMeta(defender.type).name}反击，造成 ${result.counter} 点伤害。`, "battle");
+        if (attacker.hp <= 0) {
+          rt.incrementStat("kills", defender.owner, 1 + (attacker.cargo?.length || 0));
+          rt.grantKills(defender, 1 + (attacker.cargo?.length || 0));
+          removeUnit(attacker);
+          rt.log(`${typeMeta(attacker.type).name}在反击中被击毁。`, "battle");
+        }
+      }
+      rt.checkEnd();
+    }
+    return { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack };
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -1034,46 +1170,31 @@
     function ownerExists(owner) {
       return game.units.some((entry) => entry.owner === owner) || game.sites.some((entry) => entry.owner === owner);
     }
-    function movementCost(unitEntry, x, y) {
-      return typeMeta(unitEntry.type).domain === "sea" ? 1 : TERRAIN[game.terrain[y][x]].cost;
-    }
-    function passable(unitEntry, x, y) {
-      if (!inBounds2(x, y) || getUnit(x, y)) {
-        return false;
-      }
-      const domain = typeMeta(unitEntry.type).domain;
-      if (domain === "sea") {
-        return game.terrain[y][x] === "water";
-      }
-      return game.terrain[y][x] !== "water" && game.terrain[y][x] !== "mountain";
-    }
-    function movementNeighbors(unitEntry, currentCost, x, y) {
-      return adjacent82(x, y);
-    }
-    function reachable(unitEntry) {
-      const seen = /* @__PURE__ */ new Map([[cellKey(unitEntry.x, unitEntry.y), 0]]);
-      const queue = [{ x: unitEntry.x, y: unitEntry.y, cost: 0 }];
-      while (queue.length) {
-        const current = queue.shift();
-        for (const next of movementNeighbors(unitEntry, current.cost, current.x, current.y)) {
-          if (!passable(unitEntry, next.x, next.y)) {
-            continue;
-          }
-          const step = movementCost(unitEntry, next.x, next.y);
-          const diagonal = next.x !== current.x && next.y !== current.y;
-          const cost = current.cost + (diagonal ? step * Math.SQRT2 : step);
-          const key = cellKey(next.x, next.y);
-          if (cost > unitEntry.move) {
-            continue;
-          }
-          if (!seen.has(key) || cost < seen.get(key)) {
-            seen.set(key, cost);
-            queue.push({ x: next.x, y: next.y, cost });
-          }
-        }
-      }
-      return seen;
-    }
+    const rt = {
+      get game() {
+        return game;
+      },
+      get W() {
+        return W;
+      },
+      get H() {
+        return H;
+      },
+      inBounds: inBounds2,
+      adjacent4: adjacent42,
+      adjacent8: adjacent82,
+      getUnit,
+      getSite,
+      areAllies,
+      areEnemies,
+      ownerName,
+      log,
+      incrementStat,
+      recordStatSnapshot,
+      grantKills,
+      checkEnd
+    };
+    const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
     function log(text, kind = "") {
       game.logs.push({ text, kind });
       if (game.logs.length > 80) {
@@ -1086,92 +1207,7 @@
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => $("toast").classList.add("hidden"), 1800);
     }
-    function siteBonus(siteEntry, unitEntry, mode) {
-      if (!siteEntry || !areAllies(siteEntry.owner, unitEntry.owner)) {
-        return 0;
-      }
-      const domain = typeMeta(unitEntry.type).domain;
-      if ((siteEntry.kind === "city" || siteEntry.kind === "camp" || siteEntry.kind === "barracksSmall" || siteEntry.kind === "barracksLarge") && domain === "land") {
-        const supportTier = siteMeta(siteEntry.kind).supportTier || siteEntry.tier;
-        return mode === "attack" ? supportTier : supportTier * 2;
-      }
-      if (siteEntry.kind === "shipyard" && domain === "sea") {
-        return mode === "attack" ? siteEntry.tier : siteEntry.tier + 1;
-      }
-      if (siteEntry.kind === "fortress" && domain === "sea") {
-        return mode === "attack" ? 1 : 3;
-      }
-      return 0;
-    }
-    function matchupBonus(attacker, defender) {
-      const bonusVs = typeMeta(attacker.type).bonusVs || {};
-      return bonusVs[defender.type] || 0;
-    }
-    function computeDamage(attacker, defender, fromCell, toCell, isCounter, deterministic) {
-      const attackMeta = typeMeta(attacker.type);
-      const defenseMeta = typeMeta(defender.type);
-      const attackSite = getSite(fromCell.x, fromCell.y);
-      const defenseSite = getSite(toCell.x, toCell.y);
-      const terrainDef = TERRAIN[game.terrain[toCell.y][toCell.x]].def;
-      const attackBuff = siteBonus(attackSite, attacker, "attack") + matchupBonus(attacker, defender);
-      const defenseBuff = siteBonus(defenseSite, defender, "defense") + terrainDef;
-      const attackHpFactor = 0.55 + attacker.hp / attacker.maxHp * 0.65;
-      const defendHpFactor = 0.55 + defender.hp / defender.maxHp * 0.55;
-      const charge = attackMeta.charge && !isCounter && diagonalDist(fromCell, toCell) === 1 && attacker.move === attacker.maxMove ? attackMeta.charge : 0;
-      const base = (attackMeta.atk + attackBuff + attacker.rank) * attackHpFactor + charge;
-      const shield = (defenseMeta.def + defenseBuff) * defendHpFactor;
-      const variance = deterministic ? 1 : rnd(3);
-      return clamp(Math.round(base - shield * 0.58 + 2 + variance), 1, defender.hp);
-    }
-    function previewCombat(attacker, defender, fromCell, deterministic) {
-      const attackFrom = fromCell || { x: attacker.x, y: attacker.y };
-      const damage = computeDamage(attacker, defender, attackFrom, { x: defender.x, y: defender.y }, false, deterministic);
-      const targetLeft = Math.max(0, defender.hp - damage);
-      let counter = 0;
-      if (targetLeft > 0 && inUnitRange(typeMeta(defender.type).range, { x: defender.x, y: defender.y }, attackFrom)) {
-        counter = clamp(Math.round(computeDamage(defender, attacker, { x: defender.x, y: defender.y }, attackFrom, true, deterministic) * 0.8), 0, attacker.hp);
-      }
-      return { damage, counter, kill: targetLeft <= 0, targetLeft, selfLeft: Math.max(0, attacker.hp - counter) };
-    }
-    function canAttack(attacker, defender, fromCell = { x: attacker.x, y: attacker.y }) {
-      return !!attacker && !!defender && attacker.owner === game.side && !attacker.hasAttacked && areEnemies(attacker.owner, defender.owner) && inUnitRange(typeMeta(attacker.type).range, fromCell, defender);
-    }
-    function removeUnit(unitEntry) {
-      if (unitEntry.cargo?.length) {
-        log(`${typeMeta(unitEntry.type).name}被击沉，船上搭载单位全部损失。`, "warning");
-      }
-      incrementStat("losses", unitEntry.owner, 1 + (unitEntry.cargo?.length || 0));
-      game.units = game.units.filter((entry) => entry !== unitEntry);
-      recordStatSnapshot("loss");
-      if (!game.over) {
-        checkEnd();
-      }
-    }
-    function attack(attacker, defender) {
-      const result = previewCombat(attacker, defender, { x: attacker.x, y: attacker.y }, false);
-      defender.hp -= result.damage;
-      defender.lastAttacked = true;
-      attacker.move = 0;
-      attacker.hasAttacked = true;
-      attacker.acted = true;
-      log(`${ownerName(attacker.owner)}的${typeMeta(attacker.type).name}攻击${ownerName(defender.owner)}的${typeMeta(defender.type).name}，造成 ${result.damage} 点伤害。`, "battle");
-      if (defender.hp <= 0) {
-        incrementStat("kills", attacker.owner, 1 + (defender.cargo?.length || 0));
-        grantKills(attacker, 1 + (defender.cargo?.length || 0));
-        removeUnit(defender);
-        log(`${typeMeta(defender.type).name}被消灭。`, "battle");
-      } else if (result.counter > 0) {
-        attacker.hp -= result.counter;
-        log(`${typeMeta(defender.type).name}反击，造成 ${result.counter} 点伤害。`, "battle");
-        if (attacker.hp <= 0) {
-          incrementStat("kills", defender.owner, 1 + (attacker.cargo?.length || 0));
-          grantKills(defender, 1 + (attacker.cargo?.length || 0));
-          removeUnit(attacker);
-          log(`${typeMeta(attacker.type).name}在反击中被击毁。`, "battle");
-        }
-      }
-      checkEnd();
-    }
+    const { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack } = createCombat(rt);
     function strategicSiteValue(siteEntry, owner, unitEntry) {
       if (siteEntry.owner === owner || areAllies(siteEntry.owner, owner)) {
         return 0;
