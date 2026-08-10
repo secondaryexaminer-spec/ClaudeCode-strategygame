@@ -146,36 +146,6 @@
     return Object.entries(COLOR_PRESETS);
   }
 
-  // src/io/storage.js
-  function createLocalStorageBackend() {
-    const ok = typeof localStorage !== "undefined";
-    return {
-      kind: "localStorage",
-      // Survives page reloads, but NOT a browser cache/site-data clear.
-      durable: false,
-      available: ok,
-      getItem(key) {
-        return ok ? localStorage.getItem(key) : null;
-      },
-      setItem(key, value) {
-        if (ok) localStorage.setItem(key, value);
-      },
-      removeItem(key) {
-        if (ok) localStorage.removeItem(key);
-      },
-      keys() {
-        if (!ok) return [];
-        const out = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k) out.push(k);
-        }
-        return out;
-      }
-    };
-  }
-  var saveStore = createLocalStorageBackend();
-
   // src/core/grid.js
   function makeGrid(W, H, fill) {
     return Array.from({ length: H }, () => Array(W).fill(fill));
@@ -488,6 +458,172 @@
       rt.checkEnd();
     }
     return { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack };
+  }
+
+  // src/io/storage.js
+  function createLocalStorageBackend() {
+    const ok = typeof localStorage !== "undefined";
+    return {
+      kind: "localStorage",
+      // Survives page reloads, but NOT a browser cache/site-data clear.
+      durable: false,
+      available: ok,
+      getItem(key) {
+        return ok ? localStorage.getItem(key) : null;
+      },
+      setItem(key, value) {
+        if (ok) localStorage.setItem(key, value);
+      },
+      removeItem(key) {
+        if (ok) localStorage.removeItem(key);
+      },
+      keys() {
+        if (!ok) return [];
+        const out = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) out.push(k);
+        }
+        return out;
+      }
+    };
+  }
+  var saveStore = createLocalStorageBackend();
+
+  // src/io/saves.js
+  var SAVE_PREFIX = "frontier_save_";
+  function downloadSaveFile(payload) {
+    if (!payload) {
+      return;
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = String(payload.name || "save").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60);
+    link.href = url;
+    link.download = `${safeName}.frontiersave.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
+  }
+  function createSaves(rt) {
+    function listSaves() {
+      const saves = [];
+      for (const key of saveStore.keys()) {
+        if (!key || !key.startsWith(SAVE_PREFIX)) {
+          continue;
+        }
+        try {
+          const data = JSON.parse(saveStore.getItem(key));
+          saves.push({ key, name: data.name || "未命名", savedAt: data.savedAt || 0, map: data.map || "", turn: data.turn || 1 });
+        } catch (err) {
+        }
+      }
+      return saves.sort((a, b) => b.savedAt - a.savedAt);
+    }
+    function buildSavePayload(name) {
+      const { selected, pendingOrder, ...rest } = rt.game;
+      return {
+        name: name || `存档 ${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN")}`,
+        savedAt: Date.now(),
+        map: MAPS[rt.game.settings.map]?.name || rt.game.settings.map,
+        turn: rt.game.turn,
+        W: rt.W,
+        H: rt.H,
+        S: rt.S,
+        state: rest
+      };
+    }
+    function saveAsNewSave(name) {
+      if (!rt.game) {
+        return false;
+      }
+      const key = SAVE_PREFIX + Date.now();
+      try {
+        saveStore.setItem(key, JSON.stringify(buildSavePayload(name)));
+        rt.currentSaveKey = key;
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+    function overwriteCurrentSave(name) {
+      if (!rt.game || !rt.currentSaveKey) {
+        return false;
+      }
+      try {
+        saveStore.setItem(rt.currentSaveKey, JSON.stringify(buildSavePayload(name)));
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+    function importSaveToList(payload) {
+      if (!payload?.state) {
+        return false;
+      }
+      try {
+        saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
+          name: payload.name || "导入的存档",
+          savedAt: payload.savedAt || Date.now(),
+          map: payload.map || "",
+          turn: payload.turn || 1,
+          W: payload.W,
+          H: payload.H,
+          S: payload.S,
+          state: payload.state
+        }));
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+    function currentSaveName() {
+      if (!rt.currentSaveKey) {
+        return "";
+      }
+      try {
+        return JSON.parse(saveStore.getItem(rt.currentSaveKey))?.name || "";
+      } catch (err) {
+        return "";
+      }
+    }
+    function loadSave(key) {
+      let payload;
+      try {
+        payload = JSON.parse(saveStore.getItem(key));
+      } catch (err) {
+        return false;
+      }
+      if (rt.loadPayload(payload)) {
+        rt.currentSaveKey = key;
+        return true;
+      }
+      return false;
+    }
+    function deleteSave(key) {
+      saveStore.removeItem(key);
+    }
+    function readSave(key) {
+      try {
+        return JSON.parse(saveStore.getItem(key));
+      } catch (err) {
+        return null;
+      }
+    }
+    return {
+      SAVE_PREFIX,
+      listSaves,
+      buildSavePayload,
+      saveAsNewSave,
+      overwriteCurrentSave,
+      importSaveToList,
+      currentSaveName,
+      loadSave,
+      deleteSave,
+      readSave
+    };
   }
 
   // src/main.js
@@ -1180,6 +1316,15 @@
       get H() {
         return H;
       },
+      get S() {
+        return S;
+      },
+      get currentSaveKey() {
+        return currentSaveKey;
+      },
+      set currentSaveKey(value) {
+        currentSaveKey = value;
+      },
       inBounds: inBounds2,
       adjacent4: adjacent42,
       adjacent8: adjacent82,
@@ -1192,7 +1337,8 @@
       incrementStat,
       recordStatSnapshot,
       grantKills,
-      checkEnd
+      checkEnd,
+      loadPayload: (payload) => loadPayload(payload)
     };
     const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
     function log(text, kind = "") {
@@ -3555,103 +3701,18 @@
       showScreen("game");
       newGame();
     }
-    const SAVE_PREFIX = "frontier_save_";
-    function listSaves() {
-      const saves = [];
-      for (const key of saveStore.keys()) {
-        if (!key || !key.startsWith(SAVE_PREFIX)) {
-          continue;
-        }
-        try {
-          const data = JSON.parse(saveStore.getItem(key));
-          saves.push({ key, name: data.name || "未命名", savedAt: data.savedAt || 0, map: data.map || "", turn: data.turn || 1 });
-        } catch (err) {
-        }
-      }
-      return saves.sort((a, b) => b.savedAt - a.savedAt);
-    }
-    function buildSavePayload(name) {
-      const { selected, pendingOrder, ...rest } = game;
-      return {
-        name: name || `存档 ${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN")}`,
-        savedAt: Date.now(),
-        map: MAPS[game.settings.map]?.name || game.settings.map,
-        turn: game.turn,
-        W,
-        H,
-        S,
-        state: rest
-      };
-    }
-    function saveAsNewSave(name) {
-      if (!game) {
-        return false;
-      }
-      const key = SAVE_PREFIX + Date.now();
-      try {
-        saveStore.setItem(key, JSON.stringify(buildSavePayload(name)));
-        currentSaveKey = key;
-        return true;
-      } catch (err) {
-        return false;
-      }
-    }
-    function overwriteCurrentSave(name) {
-      if (!game || !currentSaveKey) {
-        return false;
-      }
-      try {
-        saveStore.setItem(currentSaveKey, JSON.stringify(buildSavePayload(name)));
-        return true;
-      } catch (err) {
-        return false;
-      }
-    }
-    function importSaveToList(payload) {
-      if (!payload?.state) {
-        return false;
-      }
-      try {
-        saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
-          name: payload.name || "导入的存档",
-          savedAt: payload.savedAt || Date.now(),
-          map: payload.map || "",
-          turn: payload.turn || 1,
-          W: payload.W,
-          H: payload.H,
-          S: payload.S,
-          state: payload.state
-        }));
-        return true;
-      } catch (err) {
-        return false;
-      }
-    }
-    function currentSaveName() {
-      if (!currentSaveKey) {
-        return "";
-      }
-      try {
-        return JSON.parse(saveStore.getItem(currentSaveKey))?.name || "";
-      } catch (err) {
-        return "";
-      }
-    }
-    function downloadSaveFile(payload) {
-      if (!payload) {
-        return;
-      }
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      const safeName = String(payload.name || "save").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60);
-      link.href = url;
-      link.download = `${safeName}.frontiersave.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(url), 1e3);
-    }
+    const {
+      SAVE_PREFIX: SAVE_PREFIX2,
+      listSaves,
+      buildSavePayload,
+      saveAsNewSave,
+      overwriteCurrentSave,
+      importSaveToList,
+      currentSaveName,
+      loadSave,
+      deleteSave,
+      readSave
+    } = createSaves(rt);
     function loadPayload(payload) {
       if (!payload?.state) {
         return false;
@@ -3724,22 +3785,6 @@
           }, 200);
         }
       }, 60);
-    }
-    function loadSave(key) {
-      let payload;
-      try {
-        payload = JSON.parse(saveStore.getItem(key));
-      } catch (err) {
-        return false;
-      }
-      if (loadPayload(payload)) {
-        currentSaveKey = key;
-        return true;
-      }
-      return false;
-    }
-    function deleteSave(key) {
-      saveStore.removeItem(key);
     }
     function renderSaveList() {
       const saves = listSaves();
@@ -4093,7 +4138,11 @@
           return;
         }
         try {
-          downloadSaveFile(JSON.parse(saveStore.getItem(selectedSaveKey)));
+          const payload = readSave(selectedSaveKey);
+          if (!payload) {
+            throw new Error("存档内容无法解析");
+          }
+          downloadSaveFile(payload);
           toast("已导出存档文件，可放入游戏的 saves 文件夹长期保存。");
         } catch (err) {
           toast("导出失败：该存档已损坏。");

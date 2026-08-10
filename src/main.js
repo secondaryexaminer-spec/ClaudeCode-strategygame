@@ -9,11 +9,11 @@ import {
   cellKey, rnd, clamp, dist, shuffle,
   diagonalDist, inUnitRange, siteMeta, siteStars, typeMeta, colorOptions
 } from './core/utils.js';
-import { saveStore } from './io/storage.js';
 import { inBounds as gridInBounds, adjacent4 as gridAdjacent4, adjacent8 as gridAdjacent8 } from './core/grid.js';
 import { terrainFor } from './world/mapgen.js';
 import { createMovement } from './game/movement.js';
 import { createCombat } from './game/combat.js';
+import { createSaves, downloadSaveFile } from './io/saves.js';
 
 (() => {
   'use strict';
@@ -779,14 +779,21 @@ import { createCombat } from './game/combat.js';
   // 随着后续模块继续拆出，这个门面会不断变长；等 main.js 里只剩装配代码时，它
   // 自然就成了 core/state.js。现在还不值得单独建文件，因为它的每一项都直接指向
   // main.js 的闭包。
+  //
+  // currentSaveKey 带 setter：io/saves.js 存档/读档成功后要回写它。写路径同样只有
+  // 一处真相 —— setter 改的就是下面那个 let，不存在模块自己留一份的问题。
   const rt = {
     get game() { return game; },
     get W() { return W; },
     get H() { return H; },
+    get S() { return S; },
+    get currentSaveKey() { return currentSaveKey; },
+    set currentSaveKey(value) { currentSaveKey = value; },
     inBounds, adjacent4, adjacent8,
     getUnit, getSite,
     areAllies, areEnemies, ownerName,
-    log, incrementStat, recordStatSnapshot, grantKills, checkEnd
+    log, incrementStat, recordStatSnapshot, grantKills, checkEnd,
+    loadPayload: payload => loadPayload(payload)
   };
 
   const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
@@ -3322,110 +3329,10 @@ import { createCombat } from './game/combat.js';
     newGame();
   }
 
-  const SAVE_PREFIX = 'frontier_save_';
-
-  function listSaves() {
-    const saves = [];
-    for (const key of saveStore.keys()) {
-      if (!key || !key.startsWith(SAVE_PREFIX)) {
-        continue;
-      }
-      try {
-        const data = JSON.parse(saveStore.getItem(key));
-        saves.push({ key, name: data.name || '未命名', savedAt: data.savedAt || 0, map: data.map || '', turn: data.turn || 1 });
-      } catch (err) {
-        // Skip corrupted save entries.
-      }
-    }
-    return saves.sort((a, b) => b.savedAt - a.savedAt);
-  }
-
-  function buildSavePayload(name) {
-    const { selected, pendingOrder, ...rest } = game;
-    return {
-      name: name || `存档 ${new Date().toLocaleString('zh-CN')}`,
-      savedAt: Date.now(),
-      map: MAPS[game.settings.map]?.name || game.settings.map,
-      turn: game.turn,
-      W, H, S,
-      state: rest
-    };
-  }
-
-  function saveAsNewSave(name) {
-    if (!game) {
-      return false;
-    }
-    const key = SAVE_PREFIX + Date.now();
-    try {
-      saveStore.setItem(key, JSON.stringify(buildSavePayload(name)));
-      currentSaveKey = key;
-      return true;
-    } catch (err) {
-      return false;
-    }
-  }
-
-  function overwriteCurrentSave(name) {
-    if (!game || !currentSaveKey) {
-      return false;
-    }
-    try {
-      saveStore.setItem(currentSaveKey, JSON.stringify(buildSavePayload(name)));
-      return true;
-    } catch (err) {
-      return false;
-    }
-  }
-
-  function importSaveToList(payload) {
-    if (!payload?.state) {
-      return false;
-    }
-    try {
-      saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
-        name: payload.name || '导入的存档',
-        savedAt: payload.savedAt || Date.now(),
-        map: payload.map || '',
-        turn: payload.turn || 1,
-        W: payload.W,
-        H: payload.H,
-        S: payload.S,
-        state: payload.state
-      }));
-      return true;
-    } catch (err) {
-      return false;
-    }
-  }
-
-  function currentSaveName() {
-    if (!currentSaveKey) {
-      return '';
-    }
-    try {
-      return JSON.parse(saveStore.getItem(currentSaveKey))?.name || '';
-    } catch (err) {
-      return '';
-    }
-  }
-
-  // Browsers can't write to the game folder directly, so export downloads a .json the user can keep in /saves.
-  function downloadSaveFile(payload) {
-    if (!payload) {
-      return;
-    }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const safeName = String(payload.name || 'save').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
-    link.href = url;
-    link.download = `${safeName}.frontiersave.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  const {
+    SAVE_PREFIX, listSaves, buildSavePayload, saveAsNewSave, overwriteCurrentSave,
+    importSaveToList, currentSaveName, loadSave, deleteSave, readSave
+  } = createSaves(rt);
 
   function loadPayload(payload) {
     if (!payload?.state) {
@@ -3501,24 +3408,6 @@ import { createCombat } from './game/combat.js';
         }, 200);
       }
     }, 60);
-  }
-
-  function loadSave(key) {
-    let payload;
-    try {
-      payload = JSON.parse(saveStore.getItem(key));
-    } catch (err) {
-      return false;
-    }
-    if (loadPayload(payload)) {
-      currentSaveKey = key;
-      return true;
-    }
-    return false;
-  }
-
-  function deleteSave(key) {
-    saveStore.removeItem(key);
   }
 
   function renderSaveList() {
@@ -3876,7 +3765,13 @@ import { createCombat } from './game/combat.js';
         return;
       }
       try {
-        downloadSaveFile(JSON.parse(saveStore.getItem(selectedSaveKey)));
+        // readSave 把「存档损坏」从抛异常变成了返回 null，这里要显式还原成
+        // 失败提示 —— 否则损坏的存档会走到下面那句「已导出」，而实际什么都没下载。
+        const payload = readSave(selectedSaveKey);
+        if (!payload) {
+          throw new Error('存档内容无法解析');
+        }
+        downloadSaveFile(payload);
         toast('已导出存档文件，可放入游戏的 saves 文件夹长期保存。');
       } catch (err) {
         toast('导出失败：该存档已损坏。');
