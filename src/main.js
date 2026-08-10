@@ -27,6 +27,7 @@ import { createScoring } from './ai/scoring.js';
 import { createPathing } from './ai/pathing.js';
 import { createScripted } from './ai/scripted.js';
 import { createIntent } from './ai/intent.js';
+import { createDecide } from './ai/decide.js';
 
 (() => {
   'use strict';
@@ -507,21 +508,6 @@ import { createIntent } from './ai/intent.js';
     return game ? game.ownerOrder : [];
   }
 
-  function forceCrowding(owner) {
-    const units = game.units.filter(entry => entry.owner === owner);
-    if (!units.length) {
-      return 0;
-    }
-    const stalled = units.filter(entry => (entry.aiState?.stalledTurns || 0) >= 2).length;
-    return stalled / units.length;
-  }
-
-  function capacityPressure(owner) {
-    const landRatio = ownedUnitCount(owner, 'land') / Math.max(1, unitCapFor('land'));
-    const seaRatio = ownedUnitCount(owner, 'sea') / Math.max(1, unitCapFor('sea'));
-    return Math.max(landRatio, seaRatio);
-  }
-
   function sameCell(a, b) {
     return !!a && !!b && a.x === b.x && a.y === b.y;
   }
@@ -638,6 +624,29 @@ import { createIntent } from './ai/intent.js';
     friendSupport: (owner, x, y) => scoringApi.friendSupport(owner, x, y),
     targetValue: unitEntry => scoringApi.targetValue(unitEntry),
     futureReach: (unitEntry, lookahead) => pathingApi.futureReach(unitEntry, lookahead),
+    buildDistanceField: (unitEntry, target) => pathingApi.buildDistanceField(unitEntry, target),
+    hasLandReachToEnemyCity: owner => pathingApi.hasLandReachToEnemyCity(owner),
+    landUnitCanReachForeignCity: unitEntry => pathingApi.landUnitCanReachForeignCity(unitEntry),
+    allyCongestion: (owner, cell, excludeId) => scoringApi.allyCongestion(owner, cell, excludeId),
+    frontlineCount: (owner, target, radius) => scoringApi.frontlineCount(owner, target, radius),
+    nearbyEnemies: (cell, owner, radius) => scoringApi.nearbyEnemies(cell, owner, radius),
+    unitRoleCellBonus: (owner, unitEntry, cell, intent) => scoringApi.unitRoleCellBonus(owner, unitEntry, cell, intent),
+    unitRoleTargetBonus: (unitEntry, enemy, intent) => scoringApi.unitRoleTargetBonus(unitEntry, enemy, intent),
+    bestObjective: (owner, unitEntry, intent) => intentApi.bestObjective(owner, unitEntry, intent),
+    projectedPressure: (owner, target, lookahead, excludeId) => intentApi.projectedPressure(owner, target, lookahead, excludeId),
+    previewCombat: (attacker, defender, fromCell, deterministic) => combatApi.previewCombat(attacker, defender, fromCell, deterministic),
+    loadTransport: (transport, passenger) => transportApi.loadTransport(transport, passenger),
+    canUnloadTransport: (transport, x, y) => transportApi.canUnloadTransport(transport, x, y),
+    unloadTransport: (transport, x, y) => transportApi.unloadTransport(transport, x, y),
+    ownedUnitCount: (owner, domain) => buildApi.ownedUnitCount(owner, domain),
+    unitCapFor: domain => buildApi.unitCapFor(domain),
+    atUnitCap: (owner, domain) => buildApi.atUnitCap(owner, domain),
+    campCount: owner => buildApi.campCount(owner),
+    siteUpgradeCost: siteEntry => buildApi.siteUpgradeCost(siteEntry),
+    upgradeSite: (owner, siteEntry) => buildApi.upgradeSite(owner, siteEntry),
+    sellUnit: (owner, unitEntry) => buildApi.sellUnit(owner, unitEntry),
+    engineerBuildCells: unitEntry => buildApi.engineerBuildCells(unitEntry),
+    canBuildCamp: unitEntry => buildApi.canBuildCamp(unitEntry),
     canAttack: (attacker, defender, fromCell) => combatApi.canAttack(attacker, defender, fromCell),
     attack: (attacker, defender) => combatApi.attack(attacker, defender),
     buildableTypes: siteEntry => buildApi.buildableTypes(siteEntry),
@@ -658,14 +667,14 @@ import { createIntent } from './ai/intent.js';
   };
 
   const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
+  buildApi = createBuild(rt);
   const {
     terrainCellCounts, unitCapFor, ownedUnitCount, atUnitCap, campCount,
     unitBuildCost, sellRefund, sellUnit,
     buildableTypes, siteUpgradeCost, buildBudgetLeft, recordBuild, buildAtSite,
     upgradeSite, fullHealSite, aiRepair, consumeAction, engineerBuildCells,
     canBuildCamp, canEngineerLaunch, buildCamp, engineerLaunch
-  } = createBuild(rt);
-  buildApi = { buildableTypes, buildAtSite };
+  } = buildApi;
   turnApi = createTurn(rt);
   const {
     healOwner, grantIncome, decayTemporarySites, teamStandings, resolveStalemate,
@@ -701,6 +710,11 @@ import { createIntent } from './ai/intent.js';
     buildStrategicIntent, summarizeIntent, unitPriority, bestObjective,
     computeUnitState, finalizeUnitState
   } = intentApi;
+  const {
+    forceCrowding, capacityPressure, autoLoadAdjacent, autoUnloadAdjacent,
+    chooseAction, buildScore, aiSpendGold, aiManageForces,
+    teamNeedsEngineer, chooseTransportCargo, engineerBuildChoice
+  } = createDecide(rt);
 
   function log(text, kind = '') {
     game.logs.push({ text, kind });
@@ -767,21 +781,6 @@ import { createIntent } from './ai/intent.js';
     recordStatSnapshot('capture');
     log(`${ownerName(unitEntry.owner)}夺取了${siteEntry.name}${siteEntry.tier < oldTier ? '，设施战损降级。' : '。'}`, 'system');
     checkEnd();
-  }
-
-  function autoLoadAdjacent(transport) {
-    const options = game.units.filter(entry => entry.owner === transport.owner && typeMeta(entry.type).domain === 'land' && diagonalDist(entry, transport) === 1);
-    options.sort((a, b) => typeMeta(b.type).level - typeMeta(a.type).level || b.hp - a.hp);
-    return options.length ? loadTransport(transport, options[0]) : false;
-  }
-
-  function autoUnloadAdjacent(transport) {
-    const cells = adjacent8(transport.x, transport.y).filter(cell => canUnloadTransport(transport, cell.x, cell.y));
-    if (!cells.length) {
-      return false;
-    }
-    cells.sort((a, b) => strategicLandingScore(transport.owner, b) - strategicLandingScore(transport.owner, a));
-    return unloadTransport(transport, cells[0].x, cells[0].y);
   }
 
   function beginTurn(owner, initial) {
@@ -1301,211 +1300,6 @@ import { createIntent } from './ai/intent.js';
     advanceTurn();
   }
 
-
-  function chooseAction(owner, unitEntry, profile, intent = null) {
-    const diffCfg = DIFF[profile.diff];
-    const aggCfg = AGG[profile.agg];
-    const state = unitEntry.aiState || { stalledTurns: 0, rerouteTurns: 0 };
-    const cells = [...reachable(unitEntry).entries()].map(([key, cost]) => {
-      const [x, y] = key.split(',').map(Number);
-      return { x, y, cost };
-    });
-    cells.push({ x: unitEntry.x, y: unitEntry.y, cost: 0 });
-    const objective = bestObjective(owner, unitEntry, intent);
-    const distanceField = buildDistanceField(unitEntry, objective);
-    const enemies = game.units.filter(entry => areEnemies(entry.owner, owner));
-    const assaultSaturated = intent?.assaultSite && isBridgeheadSite(intent.assaultSite) ? frontlineCount(owner, intent.assaultSite, 2) >= 5 : false;
-    const assaultMag = assaultSaturated ? 0.4 : 1;
-    const expansionMag = assaultSaturated ? 1.5 : 1;
-    let best = { score: -Infinity, move: null, target: null };
-    for (const cell of cells) {
-      const currentPath = objective && distanceField ? distanceField.get(cellKey(unitEntry.x, unitEntry.y)) ?? dist(unitEntry, objective) : 0;
-      const nextPath = objective && distanceField ? distanceField.get(cellKey(cell.x, cell.y)) ?? dist(cell, objective) : 0;
-      const moveScore = objective ? (currentPath - nextPath) * 2.9 * diffCfg.lookahead * aggCfg.push : 0;
-      const supportScore = friendSupport(owner, cell.x, cell.y);
-      const riskPenalty = enemyThreat(owner, cell.x, cell.y) * diffCfg.risk * aggCfg.preserve * 0.9;
-      const congestionPenalty = allyCongestion(owner, cell, unitEntry.id) * (1.8 + state.stalledTurns * 0.7);
-      const siteEntry = getSite(cell.x, cell.y);
-      const captureScore = siteEntry ? strategicSiteValue(siteEntry, owner, unitEntry) + cityEconomyValue(siteEntry, owner) : 0;
-      const intentBonus = intent?.assaultSite ? Math.max(0, dist(unitEntry, intent.assaultSite) - dist(cell, intent.assaultSite)) * 1.4 * assaultMag : 0;
-      const expansionBonus = intent?.expansionSite ? Math.max(0, dist(unitEntry, intent.expansionSite) - dist(cell, intent.expansionSite)) * 1.9 * aggCfg.expansion * expansionMag : 0;
-      const futureCityPressure = objective ? Math.max(0, futureReach(unitEntry, diffCfg.lookahead) - dist(cell, objective)) * 0.35 : 0;
-      const rerouteBonus = state.rerouteTurns > 0 && objective ? Math.max(0, dist(unitEntry, objective) - dist(cell, objective)) * 0.4 : 0;
-      const terrainBonus = game.terrain[cell.y][cell.x] === 'forest' ? 3 * aggCfg.forestBias : 0;
-      const roleBonus = unitRoleCellBonus(owner, unitEntry, cell, intent);
-      const base = moveScore + supportScore + captureScore + intentBonus + expansionBonus + futureCityPressure + rerouteBonus + terrainBonus + roleBonus - riskPenalty - congestionPenalty;
-      if (base > best.score) {
-        best = { score: base, move: cell, target: null };
-      }
-      for (const enemy of enemies) {
-        if (dist(cell, enemy) > typeMeta(unitEntry.type).range) {
-          continue;
-        }
-        const preview = previewCombat(unitEntry, enemy, cell, true);
-        const focusBonus = intent?.focusTarget?.id === enemy.id ? 18 + projectedPressure(owner, enemy, diffCfg.lookahead, unitEntry.id) * 0.22 : 0;
-        const followUpBonus = projectedPressure(owner, enemy, diffCfg.lookahead, unitEntry.id) * 0.18;
-        const chaseBonus = enemy.hp <= enemy.maxHp * 0.45 ? 8 * aggCfg.chase : 0;
-        const roleTargetBonus = unitRoleTargetBonus(unitEntry, enemy, intent);
-        const score = base + preview.damage * 3.1 - preview.counter * 2.1 + (preview.kill ? 24 : 0) + targetValue(enemy) + focusBonus + followUpBonus + chaseBonus + roleTargetBonus;
-        if (score > best.score) {
-          best = { score, move: cell, target: enemy };
-        }
-      }
-    }
-    return best;
-  }
-
-  function buildScore(owner, siteEntry, type, cargoTypes = []) {
-    const meta = typeMeta(type);
-    const ownUnits = game.units.filter(entry => entry.owner === owner);
-    const enemySea = game.units.filter(entry => areEnemies(entry.owner, owner) && typeMeta(entry.type).domain === 'sea').length;
-    const enemyCavalry = game.units.filter(entry => areEnemies(entry.owner, owner) && entry.type === 'cavalry').length;
-    const ownSea = ownUnits.filter(entry => typeMeta(entry.type).domain === 'sea').length;
-    const ownLand = ownUnits.filter(entry => typeMeta(entry.type).domain === 'land').length;
-    const ownWarships = ownUnits.filter(entry => entry.type === 'warship').length;
-    const ownTransports = ownUnits.filter(entry => entry.type === 'transport').length;
-    const ownEngineers = ownUnits.filter(entry => entry.type === 'engineer').length;
-    const loadedTransports = ownUnits.filter(entry => entry.type === 'transport' && entry.cargo?.length).length;
-    // Enemy is across water and our land army already exceeds sealift -> stop piling land, build ships to move it.
-    const enemyHasCities = game.sites.some(entry => entry.kind === 'city' && areEnemies(entry.owner, owner));
-    const landStranded = enemyHasCities && !hasLandReachToEnemyCity(owner) && ownLand > ownTransports * FERRY_THROUGHPUT + 6;
-    let score = meta.level * 6 + meta.atk + meta.def * 0.5 + meta.move * 0.4;
-    if (landStranded && meta.domain === 'land') {
-      score -= 60;
-    }
-    if (siteEntry.kind === 'city') {
-      if (type === 'spearman') score += enemyCavalry * 2;
-      if (type === 'archer' || type === 'crossbow') score += ownLand > 4 ? 4 : 1;
-      if (type === 'cavalry') score += W > 30 ? 5 : 1;
-      if (type === 'guard') score += 2;
-      if (type === 'crossbow') score += ownLand >= 3 ? 6 : 3;
-      if (type === 'archer') score += game.goldByOwner[owner] < 50 ? 5 : 2;
-      if (type === 'engineer') score += ownEngineers >= 4 ? -20 : (teamNeedsEngineer(owner) && ownEngineers < 2 ? 26 : 4);
-    }
-    if (siteEntry.kind === 'shipyard') {
-      if (type === 'warship') score += enemySea * 3 + (MAPS[game.settings.map].sea ? 8 : 2) + Math.max(0, loadedTransports - ownWarships) * 4;
-      if (type === 'transport') score += (ownLand > ownSea * 2 ? 7 : 2) + (landStranded ? 22 : 0) + normalizeCargoTypes(cargoTypes).reduce((sum, cargoType) => sum + (cargoType === 'engineer' ? 6 : typeMeta(cargoType).level * 2), 0);
-    }
-    return score;
-  }
-
-  function aiSpendGold(owner, profile) {
-    const diffCfg = DIFF[profile.diff];
-    const aggCfg = AGG[profile.agg];
-    const upgrades = game.sites.filter(entry => entry.owner === owner && entry.tier < siteMeta(entry.kind).maxTier).sort((a, b) => strategicSiteValue(b, owner) - strategicSiteValue(a, owner));
-    for (const siteEntry of upgrades) {
-      if (game.goldByOwner[owner] >= siteUpgradeCost(siteEntry) && Math.random() < diffCfg.economy) {
-        upgradeSite(owner, siteEntry);
-      }
-    }
-    if (game.goldByOwner[owner] <= aggCfg.lowGoldReserve && profile.agg === 'cautious') {
-      return;
-    }
-    const crowd = capacityPressure(owner);
-    let productionBudget = diffCfg.production;
-    if (crowd >= 0.95) {
-      productionBudget = 0;
-    } else if (crowd >= 0.75) {
-      productionBudget = Math.max(1, productionBudget - 1);
-    }
-    let produced = 0;
-    while (produced < productionBudget) {
-      const options = [];
-      for (const siteEntry of game.sites.filter(entry => entry.owner === owner && !getUnit(entry.x, entry.y))) {
-        for (const type of buildableTypes(siteEntry)) {
-          if (atUnitCap(owner, typeMeta(type).domain)) {
-            continue;
-          }
-          const cargoTypes = type === 'transport' ? chooseTransportCargo(owner, game.goldByOwner[owner], true) : [];
-          const totalCost = type === 'transport' ? transportCost(cargoTypes) : typeMeta(type).cost;
-          if (game.goldByOwner[owner] >= totalCost) {
-            options.push({ siteEntry, type, cargoTypes, score: buildScore(owner, siteEntry, type, cargoTypes) });
-          }
-        }
-      }
-      options.sort((a, b) => b.score - a.score);
-      if (!options.length || !buildAtSite(owner, options[0].siteEntry, options[0].type, { cargoTypes: options[0].cargoTypes })) {
-        break;
-      }
-      produced += 1;
-    }
-  }
-
-  function aiManageForces(owner) {
-    const landCap = unitCapFor('land');
-    const landCount = ownedUnitCount(owner, 'land');
-    const crowd = forceCrowding(owner);
-    if (landCount <= landCap && crowd < 0.6) {
-      return;
-    }
-    const candidates = game.units.filter(entry => entry.owner === owner && typeMeta(entry.type).domain === 'land' && entry.type !== 'engineer' && (entry.aiState?.stalledTurns || 0) >= 3);
-    candidates.sort((a, b) => typeMeta(a.type).level - typeMeta(b.type).level || (b.aiState?.stalledTurns || 0) - (a.aiState?.stalledTurns || 0));
-    let quota = Math.max(landCount - landCap, crowd > 0.6 ? 1 : 0);
-    quota = Math.min(quota, 3);
-    for (const unitEntry of candidates.slice(0, quota)) {
-      sellUnit(owner, unitEntry);
-    }
-  }
-
-  function teamNeedsEngineer(owner) {
-    const enemyCities = game.sites.filter(siteEntry => siteEntry.kind === 'city' && areEnemies(siteEntry.owner, owner));
-    const ownedEngineers = game.units.filter(unitEntry => unitEntry.owner === owner && unitEntry.type === 'engineer').length;
-    return !ownedEngineers || (!!enemyCities.length && !hasLandReachToEnemyCity(owner));
-  }
-
-  function chooseTransportCargo(owner, budget, preferEngineer = false) {
-    // A surplus of existing land units is stranded -> build an empty transport to ferry them instead of minting new units.
-    // Only once a ferry fleet already exists, so the first transports still project force with fresh cargo.
-    const idleLand = game.units.filter(entry => entry.owner === owner && typeMeta(entry.type).domain === 'land').length;
-    const transportSlots = game.units.filter(entry => entry.owner === owner && entry.type === 'transport').length * FERRY_THROUGHPUT;
-    if (transportSlots >= 2 && idleLand > transportSlots + 4) {
-      return [];
-    }
-    const plans = preferEngineer
-      ? [['engineer', 'swordsman'], ['engineer', 'crossbow'], ['engineer'], ['swordsman', 'crossbow'], ['swordsman']]
-      : [['guard', 'engineer'], ['swordsman', 'crossbow'], ['engineer', 'swordsman'], ['swordsman', 'spearman'], ['engineer'], ['militia']];
-    return plans.find(plan => transportCost(plan) <= budget) || [];
-  }
-
-  function engineerBuildChoice(owner, engineer, intent) {
-    const waterCells = engineerBuildCells(engineer);
-    const enemyCities = game.sites.filter(siteEntry => siteEntry.kind === 'city' && areEnemies(siteEntry.owner, owner));
-    const nearestEnemyCity = enemyCities.length ? enemyCities.sort((a, b) => dist(a, engineer) - dist(b, engineer))[0] : null;
-    const hasTransport = game.units.some(unitEntry => unitEntry.owner === owner && unitEntry.type === 'transport');
-    const landFrontExists = hasLandReachToEnemyCity(owner);
-    const nearFront = (nearestEnemyCity && dist(engineer, nearestEnemyCity) <= 6) || game.units.some(unitEntry => areEnemies(unitEntry.owner, owner) && dist(unitEntry, engineer) <= 5);
-    const safeEnough = enemyThreat(owner, engineer.x, engineer.y) < typeMeta('engineer').hp * 0.6;
-    const canAffordForwardBase = game.goldByOwner[owner] >= CAMP_COST + typeMeta('swordsman').cost;
-    const needsCamp = landFrontExists && !getSite(engineer.x, engineer.y) && campCount(owner) < MAX_CAMPS_PER_SIDE && canAffordForwardBase && nearFront && safeEnough && !atUnitCap(owner, 'land');
-    if (needsCamp && canBuildCamp(engineer)) {
-      return { kind: 'camp' };
-    }
-    if (!waterCells.length) {
-      return null;
-    }
-    const ownedTransports = game.units.filter(unitEntry => unitEntry.owner === owner && unitEntry.type === 'transport').length;
-    const landWaiting = game.units.some(unitEntry => unitEntry.owner === owner && typeMeta(unitEntry.type).domain === 'land' && unitEntry.type !== 'engineer' && !landUnitCanReachForeignCity(unitEntry));
-    const needFerry = !landFrontExists && enemyCities.length > 0 && landWaiting;
-    if (needFerry && ownedTransports < 2 && game.goldByOwner[owner] >= transportCost(['engineer']) && !atUnitCap(owner, 'sea')) {
-      const cargoTypes = chooseTransportCargo(owner, game.goldByOwner[owner], true);
-      const cell = waterCells.sort((a, b) => (intent?.assaultSite ? dist(a, intent.assaultSite) - dist(b, intent.assaultSite) : 0))[0];
-      if (cell) {
-        return { kind: 'transport', cell, cargoTypes };
-      }
-    }
-    const enemySea = game.units.some(unitEntry => areEnemies(unitEntry.owner, owner) && typeMeta(unitEntry.type).domain === 'sea');
-    if (enemySea && game.goldByOwner[owner] >= typeMeta('warship').cost) {
-      return { kind: 'warship', cell: waterCells[0], cargoTypes: [] };
-    }
-    if ((teamNeedsEngineer(owner) || !hasTransport || intent?.assaultSite) && game.goldByOwner[owner] >= transportCost(['engineer'])) {
-      const cargoTypes = chooseTransportCargo(owner, game.goldByOwner[owner], true);
-      const cell = waterCells.sort((a, b) => (intent?.assaultSite ? dist(a, intent.assaultSite) - dist(b, intent.assaultSite) : 0))[0];
-      if (cell) {
-        return { kind: 'transport', cell, cargoTypes };
-      }
-    }
-    return null;
-  }
 
   // Scripted test opponent: defends the upper half of the strait and deliberately leaves the lower half open.
   async function aiTurn(owner) {
