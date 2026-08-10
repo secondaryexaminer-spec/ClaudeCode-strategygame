@@ -10,12 +10,33 @@
 |---|---|---|
 | `npm run sim` | 手工探查：跑几局看指标，调参时的即时反馈 | 无断言，只出数据 |
 | `npm run sim:suite` | 防**平衡漂移**：胜率是否还在合理区间 | 宽区间（如 25%~75%） |
-| `npm run verify:fast` | 同上，只跑 4 个单 seed 场景，**约 15 秒** | 零容忍（覆盖面较窄） |
-| `npm run verify` | 防**重构搬错**：行为是否与基线逐字段全等 | 零容忍，一个数字都不能变 |
+| `npm run smoke` | 防**渲染层搬错**：绘制会不会抛错 / 算出 NaN | 只覆盖渲染，不看游戏逻辑 |
+| `npm run verify:fast` | 同下，只跑 4 个单 seed 场景，**约 15 秒** | 零容忍（覆盖面较窄）+ 烟雾 |
+| `npm run verify` | 防**重构搬错**：行为是否与基线逐字段全等 | 零容忍，一个数字都不能变 + 烟雾 |
 
 `verify` 能成立，是因为 `fastBatch()` 会把 `Math.random` 换成种子化 LCG 再跑、
 跑完还原（见 `src/main.js` 的 `makeRng`）。因此同一组 `(config, seed, rounds, cap)`
 必然产出逐字节相同的结果 —— 这就是纯结构重构所需要的行为等价性证明。
+
+## ⚠️ verify 有一个盲区：渲染层
+
+`refresh()` 开头有 `if (fastSim) return;`，而 `verify` 跑的全是 `fastBatch`。
+**这意味着 `draw()` / `drawMinimap()` / 摄像机换算一行都不会执行** —— 渲染层
+整个删掉，行为基线照样全绿。
+
+`npm run smoke`（`sim/smoke-render.js`）专门补这个洞，已并入 `verify` 和
+`verify:fast`。它做两件普通烟雾测试不做的事：
+
+1. **strictCanvas 打桩**。默认的 ctx 打桩是个 Proxy，吞掉一切调用 —— 把 `rt.S`
+   写成 `rt.SS` 会让所有坐标变成 `NaN` 而测试照样全绿（**这是实测出来的，不是
+   假设**：第一版烟雾测试就没抓住这个错）。strictCanvas 模式下任何 `NaN` /
+   `undefined` 参数当场抛错。
+2. **统计 ctx 调用次数**。一张最小的图也有 1500+ 次调用，个位数说明 `draw` 提前
+   返回了。没有这个断言，「绘制没跑」和「绘制没问题」看起来一模一样。
+
+它靠 `__frontierDebug.redraw()` 强制同步绘制 —— 正常流程里 `draw()` 要么被
+`fastSim` 挡掉，要么得等 `runLoadingScreen` 的 `setInterval`，两条路都没法在
+测试里同步命中。
 
 ## 并行执行
 

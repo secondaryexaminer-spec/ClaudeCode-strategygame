@@ -49,16 +49,44 @@ function baseConfig(overrides = {}) {
   return cfg;
 }
 
-function createHarness(initialConfig = {}, { nocache = false } = {}) {
+function createHarness(initialConfig = {}, { nocache = false, strictCanvas = false } = {}) {
   const config = {};
   Object.assign(config, initialConfig);
 
+  // 默认的 ctx 打桩吞掉一切调用，让无头模拟不必关心绘制。
+  // 但这也意味着渲染层写错了属性名（rt.S 打成 rt.SS）时，坐标全变成 NaN
+  // 而没有任何人报警 —— Proxy 照单全收。
+  //
+  // strictCanvas 打开后，任何传进绘图调用的 NaN / undefined 参数都会立刻抛错。
+  // sim/smoke-render.js 用它给渲染层兜底；行为基线（verify）不需要，保持默认的
+  // 静默版本，省掉每帧几千次的参数检查。
+  const ctxState = { fillStyle: '', strokeStyle: '', lineWidth: 0, font: '', textAlign: '', textBaseline: '' };
+  const ctxStats = { calls: 0 };
   const ctxStub = new Proxy({}, {
     get(_t, prop) {
       if (prop === 'measureText') return () => ({ width: 0 });
-      return () => {};
+      if (!strictCanvas) return () => {};
+      if (typeof prop !== 'string') return () => {};
+      return (...args) => {
+        ctxStats.calls += 1;
+        args.forEach((arg, index) => {
+          if (typeof arg === 'number' && !Number.isFinite(arg)) {
+            throw new Error(`ctx.${prop}() 第 ${index + 1} 个参数是 ${arg}（多半是某个尺寸/坐标读到了 undefined）`);
+          }
+          if (arg === undefined && prop !== 'setTransform') {
+            throw new Error(`ctx.${prop}() 第 ${index + 1} 个参数是 undefined`);
+          }
+        });
+      };
     },
-    set() { return true; }
+    set(_t, prop, value) {
+      // fillStyle = undefined 会让整块区域画成黑色，是典型的"不报错但画错"。
+      if (strictCanvas && (value === undefined || (typeof value === 'number' && !Number.isFinite(value)))) {
+        throw new Error(`ctx.${String(prop)} 被赋值为 ${value}`);
+      }
+      ctxState[prop] = value;
+      return true;
+    }
   });
 
   const elCache = new Map();
@@ -121,6 +149,10 @@ function createHarness(initialConfig = {}, { nocache = false } = {}) {
   return {
     debug,
     gamePath,
+    // strictCanvas 模式下累计的 ctx 调用次数。用来区分「绘制跑了且没问题」和
+    // 「绘制压根没跑」—— 后者同样不抛异常，光看有没有报错会误判成通过。
+    ctxCalls: () => ctxStats.calls,
+    resetCtxCalls: () => { ctxStats.calls = 0; },
     // Apply a full config for the next scenario (values persist via elFor cache).
     setConfig(next) {
       for (const [id, val] of Object.entries(next)) {

@@ -2442,6 +2442,203 @@
     };
   }
 
+  // src/render/board.js
+  function createBoardRenderer(rt) {
+    function drawSelection(x, y, color) {
+      const ctx = rt.ctx;
+      const S = rt.S;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x * S + 3, y * S + 3, S - 6, S - 6);
+      ctx.restore();
+    }
+    function draw() {
+      const ctx = rt.ctx;
+      const canvas = rt.canvas;
+      const S = rt.S;
+      const W = rt.W;
+      const H = rt.H;
+      const game = rt.game;
+      const cam = rt.cam;
+      const zoom = rt.zoom;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.setTransform(zoom, 0, 0, zoom, -cam.x * zoom, -cam.y * zoom);
+      const activeUnit = rt.selectedUnit();
+      const activeSite = rt.selectedSite();
+      const canMoveNow = activeUnit && !activeUnit.hasAttacked && activeUnit.move > 0;
+      const moves = canMoveNow && game.side === "player" ? rt.reachable(activeUnit) : /* @__PURE__ */ new Map();
+      const unloadHints = activeUnit && typeMeta(activeUnit.type).transport && activeUnit.cargo.length ? rt.adjacent8(activeUnit.x, activeUnit.y).filter((cell) => rt.canUnloadTransport(activeUnit, cell.x, cell.y)) : [];
+      const engineerHints = game.pendingOrder?.kind === "engineer-launch" && activeUnit?.id === game.pendingOrder.builderId ? rt.engineerBuildCells(activeUnit) : [];
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const tile = TERRAIN[game.terrain[y][x]];
+          const px = x * S;
+          const py = y * S;
+          ctx.fillStyle = tile.color;
+          ctx.fillRect(px, py, S, S);
+          ctx.strokeStyle = "rgba(5,15,22,.3)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px, py, S, S);
+          if (tile.mark) {
+            ctx.fillStyle = "rgba(255,255,255,.26)";
+            ctx.font = `${Math.floor(S * 0.35)}px serif`;
+            ctx.textAlign = "center";
+            ctx.fillText(tile.mark, px + S / 2, py + S * 0.64);
+          }
+          if (moves.has(cellKey(x, y)) && (!activeUnit || x !== activeUnit.x || y !== activeUnit.y)) {
+            ctx.fillStyle = "rgba(77,164,255,.24)";
+            ctx.fillRect(px + 2, py + 2, S - 4, S - 4);
+          }
+          if (unloadHints.some((cell) => cell.x === x && cell.y === y)) {
+            ctx.fillStyle = "rgba(86,211,100,.22)";
+            ctx.fillRect(px + 4, py + 4, S - 8, S - 8);
+          }
+          if (engineerHints.some((cell) => cell.x === x && cell.y === y)) {
+            ctx.fillStyle = "rgba(242,166,90,.22)";
+            ctx.fillRect(px + 6, py + 6, S - 12, S - 12);
+          }
+        }
+      }
+      for (const siteEntry of game.sites) {
+        const px = siteEntry.x * S;
+        const py = siteEntry.y * S;
+        const pad = S * 0.14;
+        ctx.fillStyle = rt.ownerColor(siteEntry.owner);
+        ctx.fillRect(px + pad, py + pad, S - pad * 2, S - pad * 2);
+        ctx.strokeStyle = "rgba(6,12,18,.6)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(px + pad, py + pad, S - pad * 2, S - pad * 2);
+        ctx.fillStyle = "#fff";
+        ctx.font = `${Math.floor(S * 0.42)}px serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(siteMeta(siteEntry.kind).icon, px + S / 2, py + S * 0.56);
+        ctx.textBaseline = "alphabetic";
+        ctx.fillStyle = "#ffe08a";
+        ctx.font = `${Math.max(8, Math.floor(S * 0.2))}px sans-serif`;
+        ctx.fillText("★".repeat(siteStars(siteEntry)), px + S / 2, py + pad + S * 0.17);
+      }
+      const cellStacks = /* @__PURE__ */ new Map();
+      for (const unitEntry of game.units) {
+        const key = cellKey(unitEntry.x, unitEntry.y);
+        if (!cellStacks.has(key)) {
+          cellStacks.set(key, []);
+        }
+        cellStacks.get(key).push(unitEntry);
+      }
+      for (const unitEntry of game.units) {
+        const stack = cellStacks.get(cellKey(unitEntry.x, unitEntry.y));
+        const stackIndex = stack.indexOf(unitEntry);
+        const spread = stack.length > 1 ? (stackIndex - (stack.length - 1) / 2) * S * 0.16 : 0;
+        const px = unitEntry.x * S + S / 2 + spread;
+        const py = unitEntry.y * S + S / 2 - spread;
+        ctx.fillStyle = "rgba(6,13,20,.72)";
+        if (typeMeta(unitEntry.type).domain === "sea") {
+          ctx.fillRect(px - S * 0.28, py - S * 0.22, S * 0.56, S * 0.44);
+          ctx.strokeStyle = rt.ownerColor(unitEntry.owner);
+          ctx.lineWidth = 3;
+          ctx.strokeRect(px - S * 0.28, py - S * 0.22, S * 0.56, S * 0.44);
+        } else {
+          ctx.beginPath();
+          ctx.arc(px, py, S * 0.32, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = rt.ownerColor(unitEntry.owner);
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        ctx.fillStyle = "#fff";
+        ctx.font = `${Math.floor(S * 0.44)}px serif`;
+        ctx.textAlign = "center";
+        ctx.fillText(typeMeta(unitEntry.type).icon, px, py + S * 0.12);
+        ctx.fillStyle = unitEntry.owner === "player" ? "#55d77a" : "#ff6c66";
+        ctx.fillRect(px - S * 0.3, py + S * 0.34, S * 0.6 * unitEntry.hp / unitEntry.maxHp, 4);
+        if (unitEntry.cargo?.length) {
+          ctx.fillStyle = "#e3b341";
+          ctx.font = `${Math.max(9, Math.floor(S * 0.22))}px sans-serif`;
+          ctx.fillText(`${unitEntry.cargo.length}`, px + S * 0.22, py - S * 0.18);
+        }
+        if (stack.length > 1 && stackIndex === 0) {
+          ctx.fillStyle = "#7fd0ff";
+          ctx.font = `${Math.max(9, Math.floor(S * 0.24))}px sans-serif`;
+          ctx.textAlign = "left";
+          ctx.fillText(`≡${stack.length}`, unitEntry.x * S + 3, unitEntry.y * S + S - 4);
+          ctx.textAlign = "center";
+        }
+      }
+      if (activeUnit) {
+        drawSelection(activeUnit.x, activeUnit.y, "#9ecbff");
+      }
+      if (activeSite) {
+        drawSelection(activeSite.x, activeSite.y, "#ffd36c");
+      }
+      ctx.restore();
+      drawMinimap();
+    }
+    function clampCam() {
+      const canvas = rt.canvas;
+      const S = rt.S;
+      const cam = rt.cam;
+      const zoom = rt.zoom;
+      const viewW = canvas.width / zoom;
+      const viewH = canvas.height / zoom;
+      cam.x = rt.W * S <= viewW ? (rt.W * S - viewW) / 2 : clamp(cam.x, 0, rt.W * S - viewW);
+      cam.y = rt.H * S <= viewH ? (rt.H * S - viewH) / 2 : clamp(cam.y, 0, rt.H * S - viewH);
+    }
+    function centerCamOn(x, y) {
+      const S = rt.S;
+      rt.cam.x = x * S + S / 2 - rt.canvas.width / rt.zoom / 2;
+      rt.cam.y = y * S + S / 2 - rt.canvas.height / rt.zoom / 2;
+      clampCam();
+    }
+    function minZoom() {
+      return clamp(Math.min(rt.canvas.width / (rt.W * rt.S), rt.canvas.height / (rt.H * rt.S)), 0.2, 1);
+    }
+    function mapIsPanned() {
+      return rt.W * rt.S * rt.zoom > rt.canvas.width + 0.5 || rt.H * rt.S * rt.zoom > rt.canvas.height + 0.5;
+    }
+    function drawMinimap() {
+      if (!mapIsPanned()) {
+        return;
+      }
+      const ctx = rt.ctx;
+      const canvas = rt.canvas;
+      const S = rt.S;
+      const W = rt.W;
+      const H = rt.H;
+      const game = rt.game;
+      const mmW = 132;
+      const mmH = Math.round(mmW * H / W);
+      const ox = canvas.width - mmW - 10;
+      const oy = canvas.height - mmH - 10;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = "rgba(6,12,18,.8)";
+      ctx.fillRect(ox - 2, oy - 2, mmW + 4, mmH + 4);
+      const sx = mmW / W;
+      const sy = mmH / H;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          ctx.fillStyle = TERRAIN[game.terrain[y][x]].color || "#26333f";
+          ctx.fillRect(ox + x * sx, oy + y * sy, Math.ceil(sx), Math.ceil(sy));
+        }
+      }
+      for (const siteEntry of game.sites) {
+        ctx.fillStyle = rt.ownerColor(siteEntry.owner);
+        ctx.fillRect(ox + siteEntry.x * sx, oy + siteEntry.y * sy, Math.max(2, sx), Math.max(2, sy));
+      }
+      for (const unitEntry of game.units) {
+        ctx.fillStyle = rt.ownerColor(unitEntry.owner);
+        ctx.fillRect(ox + unitEntry.x * sx, oy + unitEntry.y * sy, Math.max(1, sx * 0.7), Math.max(1, sy * 0.7));
+      }
+      ctx.strokeStyle = "#ffe08a";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(ox + rt.cam.x / S * sx, oy + rt.cam.y / S * sy, canvas.width / rt.zoom / S * sx, canvas.height / rt.zoom / S * sy);
+    }
+    return { draw, drawSelection, drawMinimap, clampCam, centerCamOn, minZoom, mapIsPanned };
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -2953,6 +3150,21 @@
       get fastSim() {
         return fastSim;
       },
+      get canvas() {
+        return canvas;
+      },
+      get ctx() {
+        return ctx;
+      },
+      get cam() {
+        return cam;
+      },
+      get zoom() {
+        return zoom;
+      },
+      ownerColor,
+      selectedUnit,
+      selectedSite,
       get currentSaveKey() {
         return currentSaveKey;
       },
@@ -3154,6 +3366,15 @@
       chooseTransportCargo,
       engineerBuildChoice
     } = createDecide(rt);
+    const {
+      draw,
+      drawSelection,
+      drawMinimap,
+      clampCam,
+      centerCamOn,
+      minZoom,
+      mapIsPanned
+    } = createBoardRenderer(rt);
     function log(text, kind = "") {
       game.logs.push({ text, kind });
       if (game.logs.length > 80) {
@@ -3297,177 +3518,6 @@
     function dominantCityTeam() {
       const cityTeams = [...new Set(game.sites.filter((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral").map((siteEntry) => teamOf(siteEntry.owner)))];
       return cityTeams.length === 1 ? cityTeams[0] : null;
-    }
-    function drawSelection(x, y, color) {
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.strokeRect(x * S + 3, y * S + 3, S - 6, S - 6);
-      ctx.restore();
-    }
-    function draw() {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.save();
-      ctx.setTransform(zoom, 0, 0, zoom, -cam.x * zoom, -cam.y * zoom);
-      const activeUnit = selectedUnit();
-      const activeSite = selectedSite();
-      const canMoveNow = activeUnit && !activeUnit.hasAttacked && activeUnit.move > 0;
-      const moves = canMoveNow && game.side === "player" ? reachable(activeUnit) : /* @__PURE__ */ new Map();
-      const unloadHints = activeUnit && typeMeta(activeUnit.type).transport && activeUnit.cargo.length ? adjacent82(activeUnit.x, activeUnit.y).filter((cell) => canUnloadTransport(activeUnit, cell.x, cell.y)) : [];
-      const engineerHints = game.pendingOrder?.kind === "engineer-launch" && activeUnit?.id === game.pendingOrder.builderId ? engineerBuildCells(activeUnit) : [];
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const tile = TERRAIN[game.terrain[y][x]];
-          const px = x * S;
-          const py = y * S;
-          ctx.fillStyle = tile.color;
-          ctx.fillRect(px, py, S, S);
-          ctx.strokeStyle = "rgba(5,15,22,.3)";
-          ctx.lineWidth = 1;
-          ctx.strokeRect(px, py, S, S);
-          if (tile.mark) {
-            ctx.fillStyle = "rgba(255,255,255,.26)";
-            ctx.font = `${Math.floor(S * 0.35)}px serif`;
-            ctx.textAlign = "center";
-            ctx.fillText(tile.mark, px + S / 2, py + S * 0.64);
-          }
-          if (moves.has(cellKey(x, y)) && (!activeUnit || x !== activeUnit.x || y !== activeUnit.y)) {
-            ctx.fillStyle = "rgba(77,164,255,.24)";
-            ctx.fillRect(px + 2, py + 2, S - 4, S - 4);
-          }
-          if (unloadHints.some((cell) => cell.x === x && cell.y === y)) {
-            ctx.fillStyle = "rgba(86,211,100,.22)";
-            ctx.fillRect(px + 4, py + 4, S - 8, S - 8);
-          }
-          if (engineerHints.some((cell) => cell.x === x && cell.y === y)) {
-            ctx.fillStyle = "rgba(242,166,90,.22)";
-            ctx.fillRect(px + 6, py + 6, S - 12, S - 12);
-          }
-        }
-      }
-      for (const siteEntry of game.sites) {
-        const px = siteEntry.x * S;
-        const py = siteEntry.y * S;
-        const pad = S * 0.14;
-        ctx.fillStyle = ownerColor(siteEntry.owner);
-        ctx.fillRect(px + pad, py + pad, S - pad * 2, S - pad * 2);
-        ctx.strokeStyle = "rgba(6,12,18,.6)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(px + pad, py + pad, S - pad * 2, S - pad * 2);
-        ctx.fillStyle = "#fff";
-        ctx.font = `${Math.floor(S * 0.42)}px serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(siteMeta(siteEntry.kind).icon, px + S / 2, py + S * 0.56);
-        ctx.textBaseline = "alphabetic";
-        ctx.fillStyle = "#ffe08a";
-        ctx.font = `${Math.max(8, Math.floor(S * 0.2))}px sans-serif`;
-        ctx.fillText("★".repeat(siteStars(siteEntry)), px + S / 2, py + pad + S * 0.17);
-      }
-      const cellStacks = /* @__PURE__ */ new Map();
-      for (const unitEntry of game.units) {
-        const key = cellKey(unitEntry.x, unitEntry.y);
-        if (!cellStacks.has(key)) {
-          cellStacks.set(key, []);
-        }
-        cellStacks.get(key).push(unitEntry);
-      }
-      for (const unitEntry of game.units) {
-        const stack = cellStacks.get(cellKey(unitEntry.x, unitEntry.y));
-        const stackIndex = stack.indexOf(unitEntry);
-        const spread = stack.length > 1 ? (stackIndex - (stack.length - 1) / 2) * S * 0.16 : 0;
-        const px = unitEntry.x * S + S / 2 + spread;
-        const py = unitEntry.y * S + S / 2 - spread;
-        ctx.fillStyle = "rgba(6,13,20,.72)";
-        if (typeMeta(unitEntry.type).domain === "sea") {
-          ctx.fillRect(px - S * 0.28, py - S * 0.22, S * 0.56, S * 0.44);
-          ctx.strokeStyle = ownerColor(unitEntry.owner);
-          ctx.lineWidth = 3;
-          ctx.strokeRect(px - S * 0.28, py - S * 0.22, S * 0.56, S * 0.44);
-        } else {
-          ctx.beginPath();
-          ctx.arc(px, py, S * 0.32, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = ownerColor(unitEntry.owner);
-          ctx.lineWidth = 3;
-          ctx.stroke();
-        }
-        ctx.fillStyle = "#fff";
-        ctx.font = `${Math.floor(S * 0.44)}px serif`;
-        ctx.textAlign = "center";
-        ctx.fillText(typeMeta(unitEntry.type).icon, px, py + S * 0.12);
-        ctx.fillStyle = unitEntry.owner === "player" ? "#55d77a" : "#ff6c66";
-        ctx.fillRect(px - S * 0.3, py + S * 0.34, S * 0.6 * unitEntry.hp / unitEntry.maxHp, 4);
-        if (unitEntry.cargo?.length) {
-          ctx.fillStyle = "#e3b341";
-          ctx.font = `${Math.max(9, Math.floor(S * 0.22))}px sans-serif`;
-          ctx.fillText(`${unitEntry.cargo.length}`, px + S * 0.22, py - S * 0.18);
-        }
-        if (stack.length > 1 && stackIndex === 0) {
-          ctx.fillStyle = "#7fd0ff";
-          ctx.font = `${Math.max(9, Math.floor(S * 0.24))}px sans-serif`;
-          ctx.textAlign = "left";
-          ctx.fillText(`≡${stack.length}`, unitEntry.x * S + 3, unitEntry.y * S + S - 4);
-          ctx.textAlign = "center";
-        }
-      }
-      if (activeUnit) {
-        drawSelection(activeUnit.x, activeUnit.y, "#9ecbff");
-      }
-      if (activeSite) {
-        drawSelection(activeSite.x, activeSite.y, "#ffd36c");
-      }
-      ctx.restore();
-      drawMinimap();
-    }
-    function clampCam() {
-      const viewW = canvas.width / zoom;
-      const viewH = canvas.height / zoom;
-      cam.x = W * S <= viewW ? (W * S - viewW) / 2 : clamp(cam.x, 0, W * S - viewW);
-      cam.y = H * S <= viewH ? (H * S - viewH) / 2 : clamp(cam.y, 0, H * S - viewH);
-    }
-    function centerCamOn(x, y) {
-      cam.x = x * S + S / 2 - canvas.width / zoom / 2;
-      cam.y = y * S + S / 2 - canvas.height / zoom / 2;
-      clampCam();
-    }
-    function minZoom() {
-      return clamp(Math.min(canvas.width / (W * S), canvas.height / (H * S)), 0.2, 1);
-    }
-    function mapIsPanned() {
-      return W * S * zoom > canvas.width + 0.5 || H * S * zoom > canvas.height + 0.5;
-    }
-    function drawMinimap() {
-      if (!mapIsPanned()) {
-        return;
-      }
-      const mmW = 132;
-      const mmH = Math.round(mmW * H / W);
-      const ox = canvas.width - mmW - 10;
-      const oy = canvas.height - mmH - 10;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = "rgba(6,12,18,.8)";
-      ctx.fillRect(ox - 2, oy - 2, mmW + 4, mmH + 4);
-      const sx = mmW / W;
-      const sy = mmH / H;
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          ctx.fillStyle = TERRAIN[game.terrain[y][x]].color || "#26333f";
-          ctx.fillRect(ox + x * sx, oy + y * sy, Math.ceil(sx), Math.ceil(sy));
-        }
-      }
-      for (const siteEntry of game.sites) {
-        ctx.fillStyle = ownerColor(siteEntry.owner);
-        ctx.fillRect(ox + siteEntry.x * sx, oy + siteEntry.y * sy, Math.max(2, sx), Math.max(2, sy));
-      }
-      for (const unitEntry of game.units) {
-        ctx.fillStyle = ownerColor(unitEntry.owner);
-        ctx.fillRect(ox + unitEntry.x * sx, oy + unitEntry.y * sy, Math.max(1, sx * 0.7), Math.max(1, sy * 0.7));
-      }
-      ctx.strokeStyle = "#ffe08a";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(ox + cam.x / S * sx, oy + cam.y / S * sy, canvas.width / zoom / S * sx, canvas.height / zoom / S * sy);
     }
     function updatePanels() {
       $("gold").textContent = game.settings?.spectator ? game.goldByOwner[game.side] ?? 0 : game.goldByOwner.player;
@@ -4527,7 +4577,18 @@
           }
           return debugSummary();
         },
-        newGame: () => newGame()
+        newGame: () => newGame(),
+        // 给 sim/smoke-render.js 用：强制同步走一遍完整绘制。
+        // 正常流程里 draw() 只由 refresh() 触发，而 refresh() 在 fastSim 下直接
+        // 返回、非 fastSim 下又要等 runLoadingScreen 的 setInterval 跑完才轮到 ——
+        // 两条路都没法在测试里同步命中渲染层。
+        redraw: () => {
+          if (!game) {
+            return false;
+          }
+          draw();
+          return true;
+        }
       };
       document.addEventListener("keydown", (event) => {
         if (event.code === "Space") {
