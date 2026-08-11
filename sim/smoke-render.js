@@ -56,7 +56,8 @@ const LIMITS = {
   board: { metric: 'ctx', min: 200, label: '棋盘绘制' },
   panels: { metric: 'dom', min: 30, label: '面板刷新' },
   stats: { metric: 'ctx', min: 20, label: '统计图表' },
-  click: { metric: 'hits', min: 2, label: '棋盘点击' }
+  click: { metric: 'hits', min: 2, label: '棋盘点击' },
+  lobby: { metric: 'ctx', min: 100, label: '大厅预览' }
 };
 
 function requireEntry(debug, name) {
@@ -84,7 +85,19 @@ function withSeed(seed, fn) {
 }
 
 function main() {
-  const harness = createHarness(baseConfig(CASES[0].config), { strictCanvas: true, strictDom: true });
+  // createHarness 会触发 DOMContentLoaded → setup() → showScreen('setup')
+  // → renderLobbyPreview()，所以大厅的大部分渲染在这一行就跑完了，strictDom
+  // 也已经生效。**它抛错就说明大厅层有问题**，必须单独兜住 —— 否则异常会在
+  // 用例循环之外冒出去，进程直接崩，报错里看不出是哪一层的事。
+  let harness;
+  try {
+    harness = createHarness(baseConfig(CASES[0].config), { strictCanvas: true, strictDom: true });
+  } catch (err) {
+    console.log('  FAIL 大厅初始化（setup / showScreen / renderLobbyPreview）');
+    console.log(`       ${(err && err.message) || err}`);
+    console.log('\n== ❌ 界面路径有问题：游戏还没开局就挂了 ==');
+    process.exit(1);
+  }
   let failed = 0;
   CASES.forEach((item, index) => {
     harness.setConfig(baseConfig(item.config));
@@ -188,6 +201,11 @@ function main() {
         throw new Error(`点了 ${targets.length} 个有目标的格子，只有 ${selected} 个真的选中了（多半是屏幕→格子的坐标换算错了）`);
       }
       counts.click = { hits: hits + selected };
+
+      // 大厅层放在最后：repaintLobby 里的 renderLobbyPreview 会按下拉框重算 W / H，
+      // 之后这局的棋盘尺寸就对不上了。见 __frontierDebug.repaintLobby 的注释。
+      requireEntry(harness.debug, 'repaintLobby');
+      counts.lobby = measure(() => harness.debug.repaintLobby());
 
       const parts = [];
       for (const [layer, limit] of Object.entries(LIMITS)) {

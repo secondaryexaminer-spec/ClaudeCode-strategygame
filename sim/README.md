@@ -25,7 +25,7 @@
 执行** —— `render/` 和 `ui/` 两个目录整个删掉，行为基线照样全绿。
 
 `npm run smoke`（`sim/smoke-render.js`）专门补这个洞，已并入 `verify` 和
-`verify:fast`。它覆盖四层，各自单独计数：
+`verify:fast`。它覆盖五层，各自单独计数：
 
 | 层 | 文件 | 度量 | 下限 |
 |---|---|---|---|
@@ -33,6 +33,13 @@
 | 面板刷新 | `src/ui/panels.js` | DOM 写入数 | 30（实测 63~84） |
 | 统计图表 | `src/render/stats.js` | ctx 调用数 | 20（实测 28~38） |
 | 棋盘点击 | `src/ui/input.js` | 命中数 | 2（实测 2~3） |
+| 大厅预览 | `src/ui/lobby.js` | ctx 调用数 | 100（实测 900+） |
+
+大厅还有一部分是在 **`createHarness()` 那一行**就跑完的：它触发
+`DOMContentLoaded` → `setup()` → `showScreen('setup')` → `renderLobbyPreview()`，
+所以 `fillSelectOptions` / `renderRules` / `renderCodex` / `renderAISettings`
+都在 strictDom 下真跑过。这一行单独包了 try/catch —— 否则它抛错会在用例循环之外
+冒出去，进程直接崩，报错里看不出是哪一层的事。
 
 它做四件普通烟雾测试不做的事：
 
@@ -51,8 +58,8 @@
    用的是和 `fastBatch` 相同的 LCG，跑完还原。
 
 它靠 `__frontierDebug` 的 `redraw()` / `repaintUi()` / `repaintStats()` /
-`clickCell()` 强制同步执行 —— 正常流程里这些要么被 `fastSim` 挡掉，要么得等
-`runLoadingScreen` 的 `setInterval`，两条路都没法在测试里同步命中。
+`repaintLobby()` / `clickCell()` 强制同步执行 —— 正常流程里这些要么被 `fastSim`
+挡掉，要么得等 `runLoadingScreen` 的 `setInterval`，两条路都没法在测试里同步命中。
 
 - `repaintUi()` 会依次切换六种选中态（无 / 普通单位 / 工程师 / 运兵船 / 据点 /
   船厂）各刷一遍，因为面板的分支几乎全挂在「当前选中的是什么」上，只刷默认状态
@@ -60,10 +67,12 @@
 - `clickCell(x, y)` 把格子坐标反算成 `clientX/clientY` 再喂给 `onBoard`，走的是和
   真实点击**完全相同**的路径（包括 `getBoundingClientRect` 换算），而不是绕过去
   直接调内部函数 —— 绕过去就测不到坐标换算写错这类错。
+- `repaintLobby()` 必须放在一个用例的**最后**：里面的 `renderLobbyPreview` 会按
+  大厅下拉框重算 `W` / `H`，之后这局的棋盘尺寸就对不上了。
 
-**四层的阳性对照都实跑验证过**：改错属性名 → 红、改错函数名 → 红、
+**五层的阳性对照都实跑验证过**：改错属性名 → 红、改错函数名 → 红、
 让 `updatePanels` 提前 return → 红、把格子换算的除数改成 `S * 2` → 红、
-把移动分支短路掉 → 红。
+把移动分支短路掉 → 红、大厅文案里的 `.name` 改成 `.nam` → 红。
 
 ### 它测不到什么
 
@@ -73,6 +82,8 @@
   （`zoomAt` / `panBy` / `beginPan` / `endPan`）一行没跑。
 - **onBoard 只覆盖了"选中"和"移动"两条分支**。装载、卸载、攻击、工程师下水
   都没测到。
+- **大厅的 change 事件重渲染没覆盖**：`renderLobbyPreview` 只在初始化时跑到一次，
+  换地图 / 换尺寸之后的重画没测。选项内容对不对也不验。
 - **汇总卡的数字填充测不到**：那段逻辑走 `querySelectorAll('[data-final]')`，
   打桩的 `querySelectorAll` 恒返回空数组，循环根本进不去。这是打桩的天花板。
 - **布局、样式、文案内容一概不验**。只验「跑得通、不产生 undefined/NaN」。
