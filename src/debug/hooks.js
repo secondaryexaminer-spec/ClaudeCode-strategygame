@@ -20,12 +20,14 @@
 // 加新钩子前先想清楚：它是不是**只能**从这里进？如果游戏逻辑本身能提供等价的
 // 观测点，优先改那边 —— 这个对象越大，生产代码为测试付出的代价越高。
 import { typeMeta } from '../core/utils.js';
+import { unit } from '../game/entities.js';
 
 export function createDebugHooks(rt, deps) {
   const {
     debugSummary, fastRun, fastBatch, newGame, resolveStalemate,
     draw, refresh, renderStatsSummary, drawStatsChart,
-    drawPreview, renderSaveList, renderLobbyPreview, onBoard
+    drawPreview, renderSaveList, renderLobbyPreview,
+    onBoard, zoomAt, beginPan, panBy, endPan
   } = deps;
 
   // 强制同步走一遍棋盘绘制。
@@ -107,6 +109,108 @@ export function createDebugHooks(rt, deps) {
     return true;
   }
 
+  // 摆棋盘：在指定格子放一个单位，返回它的 id。
+  //
+  // 为什么需要它：onBoard 的装载 / 卸载 / 攻击 / 工程师下水四条分支，都要求场上
+  // 存在特定的组合（运兵船旁边有陆军、敌人在射程内、工程师站在靠海陆格）。
+  // 随机开局不保证出现这些组合 —— 上一版烟雾测试就因此只覆盖到"选中"和"移动"
+  // 两条分支。与其等运气，不如直接摆出来。
+  //
+  // ⚠️ 它绕过了所有校验（金币、兵种上限、地形限制），是纯测试设施。
+  // 生产代码里没有任何东西调用它。
+  function placeUnit(type, owner, x, y) {
+    if (!rt.game) {
+      return null;
+    }
+    const entry = unit(type, owner, x, y);
+    rt.game.units.push(entry);
+    return entry.id;
+  }
+
+  // 读一个格子上的单位详情。debugSummary 出于基线稳定性只带最少字段，
+  // 这里补上 cargo / move / hasAttacked 这些断言交互链需要的东西。
+  function inspectCell(x, y) {
+    const entry = rt.getUnit(x, y);
+    if (!entry) {
+      return null;
+    }
+    return {
+      id: entry.id, type: entry.type, owner: entry.owner,
+      x: entry.x, y: entry.y, hp: entry.hp, move: entry.move,
+      hasAttacked: !!entry.hasAttacked,
+      cargo: (entry.cargo || []).map(item => item.type)
+    };
+  }
+
+  // 给工程师挂上「待下水」指令，等价于在面板上点了「在相邻海格建造战船」。
+  // 之后点海格才会真正造船 —— 那一步走的是 onBoard 的第 2 条分支。
+  //
+  // 直接写 pendingOrder 而不是模拟点面板按钮：按钮的点击处理在 ui/bindings.js，
+  // 那一层已经有「绑定检查」在管；这里要测的是 onBoard 拿到 pendingOrder 之后
+  // 的行为。
+  function armEngineerLaunch(builderId, product, cargoTypes = []) {
+    const game = rt.game;
+    if (!game) {
+      return false;
+    }
+    const builder = game.units.find(entry => entry.id === builderId);
+    if (!builder || builder.type !== 'engineer') {
+      return false;
+    }
+    game.pendingOrder = { kind: 'engineer-launch', builderId, product, cargoTypes };
+    return true;
+  }
+
+  // 地形与尺寸查询。烟雾测试要在图上找"空的海格挨着空的陆格"这类位置来摆棋盘，
+  // 而 debugSummary 只带单位和据点，不带地形。
+  function terrainAt(x, y) {
+    if (!rt.game || !rt.inBounds(x, y)) {
+      return null;
+    }
+    return rt.game.terrain[y][x];
+  }
+
+  function dimensions() {
+    return { w: rt.W, h: rt.H, cell: rt.S };
+  }
+
+  // 当前选中态。**不放进 debugSummary** —— 那个的字段是行为基线的一部分，
+  // 加字段会让 sim/baseline.json 整体失效。这里单开一个入口。
+  function selection() {
+    const selected = rt.game?.selected;
+    return {
+      kind: selected?.kind || null,
+      id: selected?.ref?.id || null,
+      x: selected?.ref?.x ?? null,
+      y: selected?.ref?.y ?? null
+    };
+  }
+
+  // 合成一次滚轮缩放。deltaY < 0 是放大。
+  // 走的是真实的 wheel 处理链（zoomAt → clampCam），所以缩放中心的换算写错了
+  // 会体现在 cam 上。
+  function wheelZoom(deltaY, x = 0, y = 0) {
+    if (!rt.game) {
+      return null;
+    }
+    const rect = rt.canvas.getBoundingClientRect();
+    zoomAt({ clientX: rect.left + x, clientY: rect.top + y, deltaY, preventDefault() {} });
+    return { zoom: rt.zoom, camX: Math.round(rt.cam.x), camY: Math.round(rt.cam.y) };
+  }
+
+  // 合成一次右键拖拽：按下 → 移动 → 抬起。返回过程中摄像机有没有真的动。
+  // button: 2 是右键 —— beginPan 只认右键，传别的值应该什么都不发生。
+  function dragPan(dx, dy, button = 2) {
+    if (!rt.game) {
+      return null;
+    }
+    const before = { x: rt.cam.x, y: rt.cam.y };
+    beginPan({ button, clientX: 0, clientY: 0 });
+    const moved = panBy({ clientX: dx, clientY: dy });
+    endPan({ button });
+    return { handled: !!moved, camMoved: rt.cam.x !== before.x || rt.cam.y !== before.y };
+  }
+
   // 合成一次棋盘点击。ui/input.js 的 onBoard 是玩家唯一的操作入口，而它在无头
   // 环境里本来完全没有覆盖 —— fastBatch 不产生鼠标事件。
   //
@@ -148,6 +252,8 @@ export function createDebugHooks(rt, deps) {
       return debugSummary();
     },
     newGame: () => newGame(),
-    redraw, repaintUi, repaintStats, repaintLobby, clickCell
+    redraw, repaintUi, repaintStats, repaintLobby,
+    clickCell, placeUnit, inspectCell, selection, terrainAt, dimensions,
+    armEngineerLaunch, wheelZoom, dragPan
   };
 }

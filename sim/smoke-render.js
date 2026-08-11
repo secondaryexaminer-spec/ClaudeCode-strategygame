@@ -37,7 +37,9 @@ const CASES = [
   // 单位，onBoard 一进门就被 `if (game.settings?.spectator)` 拦住只做选中。
   // 也就是说装载 / 攻击 / 移动那几条分支在观战局里一条都跑不到。
   // 这个用例专门关掉观战，把"选中 → 移动"这条最基本的操作链跑通。
-  { id: '内陆·可操作', config: { mapSelect: 'heartland', aiSelect: '1', spectatorSelect: 'off', diff: 'easy', agg: 'cautious' }, interactive: true }
+  // 用海岸图而不是内陆图：交互链要凑出两对"空海格挨着空陆格"来验装载和工程师
+  // 下水，内陆图的海岸线太短，实测只能凑出一对。
+  { id: '海岸·可操作', config: { mapSelect: 'coast', aiSelect: '1', spectatorSelect: 'off', diff: 'easy', agg: 'cautious' }, interactive: true }
 ];
 
 // 下限取实测值的三分之一左右，留出地图大小和兵力差异的余量，
@@ -59,6 +61,128 @@ const LIMITS = {
   click: { metric: 'hits', min: 2, label: '棋盘点击' },
   lobby: { metric: 'ctx', min: 100, label: '大厅预览' }
 };
+
+// 只在 interactive 用例里跑：构造出特定局面，逐条验证 onBoard 的分支。
+// 随机开局不保证出现"运兵船旁边有陆军"这种组合，所以用 placeUnit 直接摆出来。
+// 每条返回一句描述，失败就抛。
+const INTERACTION_CHECKS = [
+  {
+    name: '装载',
+    run(debug, spot) {
+      // 运兵船在海格、陆军在相邻陆格 → 点陆军再点船 = 装载。
+      const shipId = debug.placeUnit('transport', 'player', spot.sea.x, spot.sea.y);
+      debug.placeUnit('militia', 'player', spot.land.x, spot.land.y);
+      debug.clickCell(spot.land.x, spot.land.y);
+      debug.clickCell(spot.sea.x, spot.sea.y);
+      const ship = debug.inspectCell(spot.sea.x, spot.sea.y);
+      if (!ship || ship.id !== shipId || ship.cargo.length !== 1) {
+        throw new Error(`点陆军再点运兵船没有装载（船上有 ${ship ? ship.cargo.length : '?'} 个单位）`);
+      }
+      return `载员 ${ship.cargo.length}`;
+    }
+  },
+  {
+    name: '卸载',
+    run(debug, spot) {
+      // 承接上一条：船上已有一个陆军，点空陆格 = 卸载。
+      debug.clickCell(spot.sea.x, spot.sea.y);
+      debug.clickCell(spot.land.x, spot.land.y);
+      const ship = debug.inspectCell(spot.sea.x, spot.sea.y);
+      const landed = debug.inspectCell(spot.land.x, spot.land.y);
+      if (!ship || ship.cargo.length !== 0 || !landed) {
+        throw new Error(`点空陆格没有卸载（船上还有 ${ship ? ship.cargo.length : '?'} 个，岸上 ${landed ? '有' : '没有'}单位）`);
+      }
+      return `卸下 ${landed.type}`;
+    }
+  },
+  {
+    name: '攻击',
+    run(debug, spot) {
+      // 相邻两格摆敌我各一，点自己再点敌人 = 攻击。断言目标掉血或阵亡。
+      debug.placeUnit('swordsman', 'player', spot.landA.x, spot.landA.y);
+      debug.placeUnit('militia', 'ai0', spot.landB.x, spot.landB.y);
+      const before = debug.inspectCell(spot.landB.x, spot.landB.y);
+      debug.clickCell(spot.landA.x, spot.landA.y);
+      debug.clickCell(spot.landB.x, spot.landB.y);
+      const after = debug.inspectCell(spot.landB.x, spot.landB.y);
+      const killed = !after || after.owner !== 'ai0';
+      if (!killed && after.hp >= before.hp) {
+        throw new Error(`点敌人没有造成伤害（${before.hp} → ${after.hp}）`);
+      }
+      return killed ? '目标阵亡' : `${before.hp} → ${after.hp}`;
+    }
+  },
+  {
+    name: '工程师下水',
+    run(debug, spot) {
+      // onBoard 的第 2 条分支：有 pendingOrder 时点海格 = 完成建造。
+      // 这条链要两步：先在面板上选好造什么（这里直接写 pendingOrder，
+      // 因为面板按钮的点击不在本测试范围内），再点海格下水。
+      debug.placeUnit('engineer', 'player', spot.land2.x, spot.land2.y);
+      const engineer = debug.inspectCell(spot.land2.x, spot.land2.y);
+      debug.clickCell(spot.land2.x, spot.land2.y);
+      // 造空载运兵船（42）而不是战船（46）：开局金币是 45，战船差 1 块钱 ——
+      // 那会让这条链因为"钱不够"而失败，看起来却像派发链断了。
+      const armed = debug.armEngineerLaunch(engineer.id, 'transport', []);
+      if (!armed) {
+        throw new Error('设置 pendingOrder 失败（工程师没选中？）');
+      }
+      debug.clickCell(spot.sea2.x, spot.sea2.y);
+      const launched = debug.inspectCell(spot.sea2.x, spot.sea2.y);
+      if (!launched || launched.type !== 'transport') {
+        throw new Error(`点海格没有造出运兵船（那一格现在是 ${launched ? launched.type : '空的'}）`);
+      }
+      return `造出 ${launched.type}`;
+    }
+  },
+  {
+    name: '缩放',
+    run(debug) {
+      // 滚轮放大再缩小，断言 zoom 真的变了。
+      const zoomed = debug.wheelZoom(-100, 50, 50);
+      const back = debug.wheelZoom(100, 50, 50);
+      if (!zoomed || !back || zoomed.zoom === back.zoom) {
+        throw new Error(`滚轮没有改变缩放（${zoomed?.zoom} vs ${back?.zoom}）`);
+      }
+      return `${back.zoom.toFixed(2)} → ${zoomed.zoom.toFixed(2)}`;
+    }
+  },
+  {
+    name: '拖拽',
+    run(debug) {
+      // 先放大到地图超出视口 —— 否则 mapIsPanned() 为假，beginPan 直接不记录，
+      // 拖拽"没反应"是正确行为，断言会假绿通过（第一版就是这样）。
+      for (let i = 0; i < 6; i++) {
+        debug.wheelZoom(-100, 10, 10);
+      }
+      // 左键（button 0）不该触发平移，右键（button 2）才该。
+      const left = debug.dragPan(40, 40, 0);
+      if (left.camMoved) {
+        throw new Error('左键拖拽也平移了摄像机（beginPan 应该只认右键）');
+      }
+      const right = debug.dragPan(40, 40, 2);
+      if (!right.camMoved) {
+        throw new Error('放大到超出视口后，右键拖拽仍然没有平移摄像机');
+      }
+      return '右键平移生效，左键不生效';
+    }
+  },
+  {
+    name: '键盘',
+    run(debug, spot, harness) {
+      // Escape 应该清掉选中。走的是 bindings.js 真正注册到 document 上的回调。
+      debug.clickCell(spot.landA.x, spot.landA.y);
+      const delivered = harness.dispatchGlobal('document', 'keydown', { key: 'Escape', code: 'Escape' });
+      if (!delivered) {
+        throw new Error('document 上没有 keydown 处理器（键盘绑定丢了）');
+      }
+      if (debug.selection().kind) {
+        throw new Error('按 Escape 之后仍有选中');
+      }
+      return `${delivered} 个 keydown 处理器`;
+    }
+  }
+];
 
 // setup() 结束后必须挂上事件的元素。src/ui/bindings.js 里漏掉一行
 // addEventListener 不会报任何错 —— 那个按钮只是永远点不动，而无头环境里谁也
@@ -85,8 +209,64 @@ function requireEntry(debug, name) {
   }
 }
 
-// 用固定种子跑，理由和 verify 一样：布点、地形、初始兵力全靠 Math.random，
-// 不固定的话每次跑的都是不同的局 —— 断言就会时绿时红，而红的原因往往是"这次
+// 在当前地图上找几对空格子给交互链用：
+//   sea + land     —— 相邻的海格与陆格，验装载 / 卸载
+//   sea2 + land2   —— 另一对，验工程师下水（第一对上已经站了卸载下来的单位）
+//   landA + landB  —— 相邻的两个陆格，验攻击
+// 必须都是空的（没单位、没据点），否则摆上去的测试单位会和原有的叠在同一格 ——
+// inspectCell 只返回最上面那个，断言就会读到不是自己摆的那个单位。
+// （这是实测踩到的：工程师和卸载下来的民兵叠在了一起。）
+//
+// 找不到就抛，而不是跳过 —— 跳过等于静默减少覆盖，那正是这套测试要避免的事。
+// 真遇到某张图凑不出这些格子，该换用例配置，不该让测试悄悄变宽松。
+function findInteractionSpots(harness) {
+  const board = harness.debug.summary();
+  const taken = new Set([
+    ...board.units.map(entry => `${entry.x},${entry.y}`),
+    ...board.sites.map(entry => `${entry.x},${entry.y}`)
+  ]);
+  const free = (x, y) => !taken.has(`${x},${y}`);
+  requireEntry(harness.debug, 'terrainAt');
+  requireEntry(harness.debug, 'dimensions');
+  const isSea = (x, y) => harness.debug.terrainAt(x, y) === 'water';
+  const isLand = (x, y) => {
+    const t = harness.debug.terrainAt(x, y);
+    return !!t && t !== 'water' && t !== 'mountain';
+  };
+  const dims = harness.debug.dimensions();
+  const NEIGHBORS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  // 找一对相邻的空格子，第一个满足 firstOk、第二个满足 secondOk。找到就占位。
+  const findPair = (firstOk, secondOk) => {
+    for (let y = 0; y < dims.h; y++) {
+      for (let x = 0; x < dims.w; x++) {
+        if (!free(x, y) || !firstOk(x, y)) {
+          continue;
+        }
+        for (const [dx, dy] of NEIGHBORS) {
+          if (free(x + dx, y + dy) && secondOk(x + dx, y + dy)) {
+            taken.add(`${x},${y}`);
+            taken.add(`${x + dx},${y + dy}`);
+            return [{ x, y }, { x: x + dx, y: y + dy }];
+          }
+        }
+      }
+    }
+    return null;
+  };
+  const pairA = findPair(isSea, isLand);
+  const pairB = findPair(isSea, isLand);
+  const pairC = findPair(isLand, isLand);
+  if (!pairA || !pairB || !pairC) {
+    throw new Error(`这张图上凑不出交互链需要的空格子（海陆对 ${[pairA, pairB].filter(Boolean).length}/2、陆陆对 ${pairC ? 1 : 0}/1）`);
+  }
+  return {
+    sea: pairA[0], land: pairA[1],
+    sea2: pairB[0], land2: pairB[1],
+    landA: pairC[0], landB: pairC[1]
+  };
+}
+
+// 用固定种子跑，理由和 verify 一样：布点、地形、初始兵力全靠 Math.random，// 不固定的话每次跑的都是不同的局 —— 断言就会时绿时红，而红的原因往往是"这次
 // 敌人恰好离得近"而不是代码坏了（这是实际踩到的：点敌人有时触发攻击分支）。
 // 和 fastBatch 用的是同一个 LCG，跑完必须还原，否则会污染后续用例。
 function withSeed(seed, fn) {
@@ -230,6 +410,20 @@ function main() {
         throw new Error(`点了 ${targets.length} 个有目标的格子，只有 ${selected} 个真的选中了（多半是屏幕→格子的坐标换算错了）`);
       }
       counts.click = { hits: hits + selected };
+
+      // 交互链：装载 / 卸载 / 攻击 / 缩放 / 拖拽 / 键盘。
+      // 只在 interactive 用例里跑，因为观战局的 onBoard 一进门就 return 了。
+      // 场景靠 placeUnit 直接摆出来 —— 随机开局不保证出现这些组合。
+      if (item.interactive) {
+        requireEntry(harness.debug, 'placeUnit');
+        requireEntry(harness.debug, 'inspectCell');
+        const spot = findInteractionSpots(harness);
+        const results = [];
+        for (const check of INTERACTION_CHECKS) {
+          results.push(`${check.name}(${check.run(harness.debug, spot, harness)})`);
+        }
+        console.log(`       交互链 ${results.join(' · ')}`);
+      }
 
       // 大厅层放在最后：repaintLobby 里的 renderLobbyPreview 会按下拉框重算 W / H，
       // 之后这局的棋盘尺寸就对不上了。见 __frontierDebug.repaintLobby 的注释。

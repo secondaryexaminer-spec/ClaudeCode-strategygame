@@ -32,19 +32,18 @@
 // 输入翻译；真正的坐标夹取在 render/board.js 的 clampCam 里。分界线是：这个文件
 // 只懂事件（clientX/clientY、按键、滚轮方向），board.js 只懂世界坐标。
 //
-// 【这个模块是 verify 的盲区】
+// 【这个模块是 verify 的盲区，但烟雾测试覆盖得比较完整】
 // 行为基线（npm run verify）跑的是 fastBatch，不会有任何鼠标事件 —— 这个文件
 // 整个删掉，基线照样全绿。
 //
-// 兜底的是 sim/smoke-render.js：它通过 __frontierDebug.clickCell(x, y) 把格子
-// 坐标反算成 clientX/clientY 再喂给 onBoard，走的是和真实点击**完全相同**的路径
-// （包括 getBoundingClientRect 换算），所以坐标换算写错会被抓住；另外还有一个
-// 非观战用例专门验"选中 → 点邻格 → 单位真的动了"这条链。
+// 兜底的是 sim/smoke-render.js 的「交互链」：它通过 __frontierDebug 合成事件，
+// 走的是和真实操作**完全相同**的路径（包括 getBoundingClientRect 换算），
+// 七条链各验一条分支，全部做过阳性对照：
+//   装载 / 卸载 / 攻击 / 工程师下水 —— onBoard 的四条主要分支
+//   缩放 / 拖拽                     —— zoomAt / beginPan / panBy / endPan
+//   键盘                            —— Escape 清选中（走 bindings.js 的注册）
 //
-// 但覆盖仍然是局部的，**改完还是要开浏览器点一遍**。目前没测到的：
-//   - 装载 / 卸载 / 攻击 / 工程师下水这几条分支
-//   - 摄像机交互（zoomAt / beginPan / panBy / endPan）一行没跑
-//   - contextmenu 抑制逻辑
+// 仍然没测的：观战分支、同格叠放的循环切换、contextmenu 抑制。改这几处要开浏览器。
 import { clamp } from '../core/utils.js';
 
 export function createInput(rt) {

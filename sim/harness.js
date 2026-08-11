@@ -157,16 +157,29 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
   }
 
   let domReady = null;
+  // document / window 上的处理器不走 elFor 打桩，得单独记 —— 键盘和拖拽就绑在
+  // 这两个上面。记下来之后既能断言"绑上了"，也能用 dispatch* 合成事件。
+  const globalHandlers = { document: {}, window: {} };
+  function collect(bucket, evt, fn) {
+    bucket[evt] = bucket[evt] || [];
+    bucket[evt].push(fn);
+  }
   global.document = {
     getElementById: id => elFor(id),
     querySelector: () => null,
     querySelectorAll: () => [],
     createElement: () => elFor('__el_' + Math.random()),
-    addEventListener: (evt, fn) => { if (evt === 'DOMContentLoaded') domReady = fn; },
+    addEventListener: (evt, fn) => {
+      if (evt === 'DOMContentLoaded') {
+        domReady = fn;
+        return;
+      }
+      collect(globalHandlers.document, evt, fn);
+    },
     removeEventListener() {}
   };
   global.window = global;
-  global.addEventListener = () => {};
+  global.addEventListener = (evt, fn) => collect(globalHandlers.window, evt, fn);
   global.removeEventListener = () => {};
   global.requestAnimationFrame = () => 0;
   global.cancelAnimationFrame = () => {};
@@ -203,6 +216,16 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
     // addEventListener 是不会报错的 —— 只是那个按钮永远点不动，而无头环境里
     // 谁也不会去点它。这个入口让烟雾测试能直接断言"该绑的都绑上了"。
     handlersFor: id => ({ ...(elCache.get(id)?._handlers || {}) }),
+    // document / window 上绑了哪些事件类型。键盘和拖拽在这里，不在元素打桩里。
+    globalHandlerTypes: target => Object.keys(globalHandlers[target] || {}),
+    // 合成一次事件喂给 document / window 上注册的处理器。走的是绑定层真正注册的
+    // 那个回调，所以键盘快捷键改坏了会被抓住。
+    dispatchGlobal(target, evt, payload = {}) {
+      const list = globalHandlers[target]?.[evt] || [];
+      const event = { preventDefault() {}, stopPropagation() {}, ...payload };
+      list.forEach(fn => fn(event));
+      return list.length;
+    },
     // Apply a full config for the next scenario (values persist via elFor cache).
     setConfig(next) {
       for (const [id, val] of Object.entries(next)) {

@@ -402,7 +402,8 @@ import { typeMeta } from './core/utils.js';
     window.__frontierDebug = createDebugHooks(rt, {
       debugSummary, fastRun, fastBatch, newGame, resolveStalemate,
       draw, refresh: () => rt.refresh(), renderStatsSummary, drawStatsChart,
-      drawPreview, renderSaveList, renderLobbyPreview, onBoard
+      drawPreview, renderSaveList, renderLobbyPreview, onBoard,
+      zoomAt, beginPan, panBy, endPan
     });
     showScreen('setup');
   }

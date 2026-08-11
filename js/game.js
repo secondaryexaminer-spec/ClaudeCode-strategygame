@@ -4448,7 +4448,11 @@
       drawPreview,
       renderSaveList,
       renderLobbyPreview,
-      onBoard
+      onBoard,
+      zoomAt,
+      beginPan,
+      panBy,
+      endPan
     } = deps;
     function redraw() {
       if (!rt.game) {
@@ -4502,6 +4506,80 @@
       renderLobbyPreview();
       return true;
     }
+    function placeUnit(type, owner, x, y) {
+      if (!rt.game) {
+        return null;
+      }
+      const entry = unit(type, owner, x, y);
+      rt.game.units.push(entry);
+      return entry.id;
+    }
+    function inspectCell(x, y) {
+      const entry = rt.getUnit(x, y);
+      if (!entry) {
+        return null;
+      }
+      return {
+        id: entry.id,
+        type: entry.type,
+        owner: entry.owner,
+        x: entry.x,
+        y: entry.y,
+        hp: entry.hp,
+        move: entry.move,
+        hasAttacked: !!entry.hasAttacked,
+        cargo: (entry.cargo || []).map((item) => item.type)
+      };
+    }
+    function armEngineerLaunch(builderId, product, cargoTypes = []) {
+      const game = rt.game;
+      if (!game) {
+        return false;
+      }
+      const builder = game.units.find((entry) => entry.id === builderId);
+      if (!builder || builder.type !== "engineer") {
+        return false;
+      }
+      game.pendingOrder = { kind: "engineer-launch", builderId, product, cargoTypes };
+      return true;
+    }
+    function terrainAt(x, y) {
+      if (!rt.game || !rt.inBounds(x, y)) {
+        return null;
+      }
+      return rt.game.terrain[y][x];
+    }
+    function dimensions() {
+      return { w: rt.W, h: rt.H, cell: rt.S };
+    }
+    function selection() {
+      const selected = rt.game?.selected;
+      return {
+        kind: selected?.kind || null,
+        id: selected?.ref?.id || null,
+        x: selected?.ref?.x ?? null,
+        y: selected?.ref?.y ?? null
+      };
+    }
+    function wheelZoom(deltaY, x = 0, y = 0) {
+      if (!rt.game) {
+        return null;
+      }
+      const rect = rt.canvas.getBoundingClientRect();
+      zoomAt({ clientX: rect.left + x, clientY: rect.top + y, deltaY, preventDefault() {
+      } });
+      return { zoom: rt.zoom, camX: Math.round(rt.cam.x), camY: Math.round(rt.cam.y) };
+    }
+    function dragPan(dx, dy, button = 2) {
+      if (!rt.game) {
+        return null;
+      }
+      const before = { x: rt.cam.x, y: rt.cam.y };
+      beginPan({ button, clientX: 0, clientY: 0 });
+      const moved = panBy({ clientX: dx, clientY: dy });
+      endPan({ button });
+      return { handled: !!moved, camMoved: rt.cam.x !== before.x || rt.cam.y !== before.y };
+    }
     function clickCell(x, y) {
       const game = rt.game;
       if (!game) {
@@ -4537,7 +4615,15 @@
       repaintUi,
       repaintStats,
       repaintLobby,
-      clickCell
+      clickCell,
+      placeUnit,
+      inspectCell,
+      selection,
+      terrainAt,
+      dimensions,
+      armEngineerLaunch,
+      wheelZoom,
+      dragPan
     };
   }
 
@@ -5128,7 +5214,11 @@
         drawPreview,
         renderSaveList,
         renderLobbyPreview,
-        onBoard
+        onBoard,
+        zoomAt,
+        beginPan,
+        panBy,
+        endPan
       });
       showScreen("setup");
     }
