@@ -137,7 +137,11 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
       appendChild() {}, removeChild() {}, insertAdjacentHTML() {},
       setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
       closest() { return null; }, querySelector() { return null; }, querySelectorAll() { return []; },
-      getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; },
+      // 返回和 canvas 像素尺寸一致的矩形（即 CSS 缩放比为 1:1）。
+      // 原来这里恒返回 width: 0，会让 ui/input.js 的 `canvas.width / rect.width`
+      // 变成 0/0 = NaN，任何合成点击都落在 NaN 格上 —— 点击路径根本没法测。
+      // 只有 input.js 用这个方法，改它不影响其它工具。
+      getBoundingClientRect() { return { left: 0, top: 0, width: this.width || 0, height: this.height || 0 }; },
       focus() {}, click() {}, remove() {},
       onclick: null, onchange: null, oninput: null
     };

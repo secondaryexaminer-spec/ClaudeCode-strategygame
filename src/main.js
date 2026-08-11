@@ -31,6 +31,7 @@ import { createDecide } from './ai/decide.js';
 import { createBoardRenderer } from './render/board.js';
 import { createStatsRenderer } from './render/stats.js';
 import { createPanels } from './ui/panels.js';
+import { createInput } from './ui/input.js';
 
 (() => {
   'use strict';
@@ -44,8 +45,6 @@ import { createPanels } from './ui/panels.js';
   let S = 40;
   let cam = { x: 0, y: 0 };
   let zoom = 1;
-  let panState = null;
-  let panSuppressContext = false;
   let selectedSaveKey = null;
   let currentSaveKey = null;
   let toastTimer = null;
@@ -455,6 +454,7 @@ import { createPanels } from './ui/panels.js';
   let buildApi;
   let pathingApi;
   let intentApi;
+  let boardApi;
   const rt = {
     get game() { return game; },
     get W() { return W; },
@@ -465,8 +465,11 @@ import { createPanels } from './ui/panels.js';
     get ctx() { return ctx; },
     get cam() { return cam; },
     get zoom() { return zoom; },
+    // zoom 带 setter：ui/input.js 的滚轮缩放要写它。cam 是对象，改字段即可，
+    // 不需要 setter。
+    set zoom(value) { zoom = value; },
     ownerColor, selectedUnit, selectedSite,
-    statTimeSeconds, domainName,
+    statTimeSeconds, domainName, toast, ensureStatsStarted,
     sideLabel: () => turnApi.sideLabel(),
     siteBonus: (siteEntry, unitEntry, key) => combatApi.siteBonus(siteEntry, unitEntry, key),
     sellRefund: unitEntry => buildApi.sellRefund(unitEntry),
@@ -503,6 +506,7 @@ import { createPanels } from './ui/panels.js';
     projectedPressure: (owner, target, lookahead, excludeId) => intentApi.projectedPressure(owner, target, lookahead, excludeId),
     previewCombat: (attacker, defender, fromCell, deterministic) => combatApi.previewCombat(attacker, defender, fromCell, deterministic),
     loadTransport: (transport, passenger) => transportApi.loadTransport(transport, passenger),
+    canLoadTransport: (transport, passenger) => transportApi.canLoadTransport(transport, passenger),
     canUnloadTransport: (transport, x, y) => transportApi.canUnloadTransport(transport, x, y),
     unloadTransport: (transport, x, y) => transportApi.unloadTransport(transport, x, y),
     ownedUnitCount: (owner, domain) => buildApi.ownedUnitCount(owner, domain),
@@ -514,12 +518,17 @@ import { createPanels } from './ui/panels.js';
     sellUnit: (owner, unitEntry) => buildApi.sellUnit(owner, unitEntry),
     engineerBuildCells: unitEntry => buildApi.engineerBuildCells(unitEntry),
     canBuildCamp: unitEntry => buildApi.canBuildCamp(unitEntry),
+    canEngineerLaunch: (unitEntry, product, cell, cargoTypes) => buildApi.canEngineerLaunch(unitEntry, product, cell, cargoTypes),
+    engineerLaunch: (unitEntry, product, cell, cargoTypes) => buildApi.engineerLaunch(unitEntry, product, cell, cargoTypes),
     canAttack: (attacker, defender, fromCell) => combatApi.canAttack(attacker, defender, fromCell),
     attack: (attacker, defender) => combatApi.attack(attacker, defender),
     buildableTypes: siteEntry => buildApi.buildableTypes(siteEntry),
     buildAtSite: (owner, siteEntry, type, options) => buildApi.buildAtSite(owner, siteEntry, type, options),
     clearPendingOrder,
     checkEnd: () => turnApi.checkEnd(),
+    minZoom: () => boardApi.minZoom(),
+    clampCam: () => boardApi.clampCam(),
+    mapIsPanned: () => boardApi.mapIsPanned(),
     loadPayload: payload => loadPayload(payload),
     hidePauseModal: () => $('pauseModal')?.classList.add('hidden'),
     onGameOver: (win, text) => {
@@ -582,15 +591,22 @@ import { createPanels } from './ui/panels.js';
     chooseAction, buildScore, aiSpendGold, aiManageForces,
     teamNeedsEngineer, chooseTransportCargo, engineerBuildChoice
   } = createDecide(rt);
+  boardApi = createBoardRenderer(rt);
   const {
     draw, drawSelection, drawMinimap, clampCam, centerCamOn, minZoom, mapIsPanned
-  } = createBoardRenderer(rt);
+  } = boardApi;
   const { chartMetrics, statLabel, renderStatsSummary, drawStatsChart } = createStatsRenderer(rt);
   // panels 放在最后：它是依赖最多的一层（要用到 build / turn / combat 三边的结果），
   // 而它自己不被任何模块依赖 —— 只有 refresh() 调它。
   const {
     uiState, updatePanels, transportConfigMarkup, setCargoPreset, engineerSelected
   } = createPanels(rt);
+  // input 依赖 panels 之外的几乎所有东西（它是"点一下会发生什么"的派发中心），
+  // 所以放在装配链末尾。
+  const {
+    tileFromEvent, selectRef, onBoard, endTurn,
+    zoomAt, beginPan, panBy, endPan, consumeContextSuppression
+  } = createInput(rt);
 
   function log(text, kind = '') {
     game.logs.push({ text, kind });
@@ -743,122 +759,6 @@ import { createPanels } from './ui/panels.js';
     }
     draw();
     updatePanels();
-  }
-
-  function selectRef(kind, ref) {
-    if (!ref || game.selected?.ref?.id !== ref.id) {
-      clearPendingOrder();
-    }
-    if (!ref) {
-      game.selected = null;
-      refresh();
-      return;
-    }
-    game.selected = {
-      kind,
-      ref,
-      unit: kind === 'unit' ? ref : getUnit(ref.x, ref.y),
-      site: kind === 'site' ? ref : getSite(ref.x, ref.y)
-    };
-    refresh();
-  }
-
-  function tileFromEvent(event) {
-    const rect = canvas.getBoundingClientRect();
-    const sx = (event.clientX - rect.left) * canvas.width / rect.width;
-    const sy = (event.clientY - rect.top) * canvas.height / rect.height;
-    return {
-      x: Math.floor((cam.x + sx / zoom) / S),
-      y: Math.floor((cam.y + sy / zoom) / S)
-    };
-  }
-
-  function onBoard(event) {
-    if (!game || game.over) {
-      return;
-    }
-    const cell = tileFromEvent(event);
-    if (!inBounds(cell.x, cell.y)) {
-      return;
-    }
-    const targetUnit = getUnit(cell.x, cell.y);
-    const targetSite = getSite(cell.x, cell.y);
-    const selectedUnit = game.selected?.kind === 'unit' ? game.selected.ref : null;
-    // Only the player's own units can be commanded; foreign units may be selected for info only.
-    const ownUnit = selectedUnit && selectedUnit.owner === 'player' ? selectedUnit : null;
-
-    if (game.settings?.spectator) {
-      if (targetUnit) {
-        selectRef('unit', targetUnit);
-        return;
-      }
-      if (targetSite) {
-        selectRef('site', targetSite);
-      }
-      return;
-    }
-
-    if (game.pendingOrder?.kind === 'engineer-launch' && ownUnit && ownUnit.id === game.pendingOrder.builderId && canEngineerLaunch(ownUnit, game.pendingOrder.product, cell, game.pendingOrder.cargoTypes)) {
-      engineerLaunch(ownUnit, game.pendingOrder.product, cell, game.pendingOrder.cargoTypes);
-      selectRef('unit', ownUnit);
-      return;
-    }
-
-    if (ownUnit && targetUnit && ownUnit.type === 'transport' && canLoadTransport(ownUnit, targetUnit)) {
-      loadTransport(ownUnit, targetUnit);
-      selectRef('unit', ownUnit);
-      return;
-    }
-    if (ownUnit && targetUnit && targetUnit.type === 'transport' && canLoadTransport(targetUnit, ownUnit)) {
-      loadTransport(targetUnit, ownUnit);
-      selectRef('unit', targetUnit);
-      return;
-    }
-    if (ownUnit && !targetUnit && ownUnit.type === 'transport' && canUnloadTransport(ownUnit, cell.x, cell.y)) {
-      unloadTransport(ownUnit, cell.x, cell.y);
-      selectRef('unit', ownUnit);
-      return;
-    }
-    if (targetUnit?.owner === 'player') {
-      ensureStatsStarted();
-      const ownStack = unitsAt(cell.x, cell.y).filter(entry => entry.owner === 'player');
-      if (ownStack.length > 1 && ownUnit && ownStack.includes(ownUnit)) {
-        selectRef('unit', ownStack[(ownStack.indexOf(ownUnit) + 1) % ownStack.length]);
-      } else {
-        selectRef('unit', targetUnit);
-      }
-      return;
-    }
-    if (ownUnit && targetUnit && canAttack(ownUnit, targetUnit)) {
-      attack(ownUnit, targetUnit);
-      selectRef(game.units.includes(ownUnit) ? 'unit' : null, game.units.includes(ownUnit) ? ownUnit : null);
-      return;
-    }
-    if (targetUnit) {
-      selectRef('unit', targetUnit);
-      return;
-    }
-    if (ownUnit && !targetUnit && moveUnit(ownUnit, cell.x, cell.y)) {
-      selectRef('unit', ownUnit);
-      return;
-    }
-    if (targetSite) {
-      if (targetSite.owner === 'player') {
-        ensureStatsStarted();
-      }
-      selectRef('site', targetSite);
-      return;
-    }
-    toast('请选择己方单位，或点击有效的移动、攻击、装载、卸载目标。');
-  }
-
-  function endTurn() {
-    if (!game || game.settings?.spectator || game.side !== 'player' || game.over) {
-      return;
-    }
-    clearPendingOrder();
-    game.selected = null;
-    advanceTurn();
   }
 
 
@@ -1480,56 +1380,25 @@ import { createPanels } from './ui/panels.js';
       refresh();
     });
     canvas.addEventListener('click', onBoard);
-    canvas.addEventListener('mousedown', event => {
-      if (event.button === 2 && mapIsPanned()) {
-        panState = { x: event.clientX, y: event.clientY, moved: false };
-      }
-    });
+    canvas.addEventListener('mousedown', beginPan);
     canvas.addEventListener('wheel', event => {
       if (!game || game.over) {
         return;
       }
       event.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const sx = (event.clientX - rect.left) * canvas.width / rect.width;
-      const sy = (event.clientY - rect.top) * canvas.height / rect.height;
-      const worldX = cam.x + sx / zoom;
-      const worldY = cam.y + sy / zoom;
-      zoom = clamp(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), minZoom(), 3);
-      // Keep the map point under the cursor fixed while zooming.
-      cam.x = worldX - sx / zoom;
-      cam.y = worldY - sy / zoom;
-      clampCam();
+      zoomAt(event);
       draw();
     }, { passive: false });
     window.addEventListener('mousemove', event => {
-      if (!panState) {
-        return;
-      }
-      const rect = canvas.getBoundingClientRect();
-      const scale = canvas.width / rect.width;
-      const dx = event.clientX - panState.x;
-      const dy = event.clientY - panState.y;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
-        panState.moved = true;
-      }
-      cam.x -= dx * scale / zoom;
-      cam.y -= dy * scale / zoom;
-      panState.x = event.clientX;
-      panState.y = event.clientY;
-      clampCam();
-      draw();
-    });
-    window.addEventListener('mouseup', event => {
-      if (event.button === 2 && panState) {
-        panSuppressContext = panState.moved;
-        panState = null;
+      if (panBy(event)) {
+        draw();
       }
     });
+    window.addEventListener('mouseup', endPan);
     canvas.addEventListener('contextmenu', event => {
       event.preventDefault();
-      if (panSuppressContext) {
-        panSuppressContext = false;
+      // 刚拖拽完的那一次右键不当成"取消选中"，见 ui/input.js。
+      if (consumeContextSuppression()) {
         return;
       }
       clearPendingOrder();
@@ -1755,6 +1624,32 @@ import { createPanels } from './ui/panels.js';
         renderStatsSummary(false);
         drawStatsChart();
         return true;
+      },
+      // 合成一次棋盘点击。ui/input.js 的 onBoard 是玩家唯一的操作入口，而它在
+      // 无头环境里完全没有覆盖 —— fastBatch 不产生鼠标事件，烟雾测试也只走绘制。
+      //
+      // 这里把格子坐标反算成 clientX/clientY 再喂给 onBoard，走的是和真实点击
+      // 一模一样的路径（包括 getBoundingClientRect 的换算），而不是绕过它直接调
+      // 内部函数 —— 绕过去就测不到坐标换算写错这类错了。
+      //
+      // 返回点击后的选中态摘要，方便调用方断言"点了确实有反应"。
+      clickCell: (x, y) => {
+        if (!game) {
+          return null;
+        }
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = rect.width ? canvas.width / rect.width : 1;
+        const scaleY = rect.height ? canvas.height / rect.height : 1;
+        // tileFromEvent 的逆运算，取格子中心避免落在边界上。
+        const px = ((x + 0.5) * S - cam.x) * zoom;
+        const py = ((y + 0.5) * S - cam.y) * zoom;
+        onBoard({ clientX: rect.left + px / scaleX, clientY: rect.top + py / scaleY });
+        return {
+          kind: game.selected?.kind || null,
+          id: game.selected?.ref?.id || null,
+          x: game.selected?.ref?.x ?? null,
+          y: game.selected?.ref?.y ?? null
+        };
       }
     };
     document.addEventListener('keydown', event => {

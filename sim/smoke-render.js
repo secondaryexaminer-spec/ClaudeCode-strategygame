@@ -32,7 +32,12 @@ const { createHarness, baseConfig } = require('./harness');
 const CASES = [
   { id: '海峡·2AI', config: { mapSelect: 'strait', aiSelect: '2', diff: 'brutal', agg: 'balanced' } },
   { id: '群岛·3AI', config: { mapSelect: 'archipelago', aiSelect: '3', diff: 'medium', agg: 'reckless' } },
-  { id: '平原·1AI', config: { mapSelect: 'plains', aiSelect: '1', diff: 'easy', agg: 'cautious' } }
+  { id: '平原·1AI', config: { mapSelect: 'plains', aiSelect: '1', diff: 'easy', agg: 'cautious' } },
+  // 上面三个都走 baseConfig 的默认值 spectatorSelect:'on' —— 观战局根本没有玩家
+  // 单位，onBoard 一进门就被 `if (game.settings?.spectator)` 拦住只做选中。
+  // 也就是说装载 / 攻击 / 移动那几条分支在观战局里一条都跑不到。
+  // 这个用例专门关掉观战，把"选中 → 移动"这条最基本的操作链跑通。
+  { id: '内陆·可操作', config: { mapSelect: 'heartland', aiSelect: '1', spectatorSelect: 'off', diff: 'easy', agg: 'cautious' }, interactive: true }
 ];
 
 // 下限取实测值的三分之一左右，留出地图大小和兵力差异的余量，
@@ -43,10 +48,15 @@ const CASES = [
 // 写 textContent 填进去的，打桩的 querySelectorAll 恒返回空数组，那段循环在无头
 // 环境里根本进不去。**这是打桩的天花板，不是代码的问题**：汇总卡的数字填充逻辑
 // 这里测不到，别为了让数字好看去调下限假装覆盖了。
+// 固定种子，理由见 withSeed。改这个值会换掉四张图的布局，
+// 换完请确认四个用例仍然都能跑到该跑的分支（尤其是"内陆·可操作"的移动链）。
+const SEED = 20260811;
+
 const LIMITS = {
   board: { metric: 'ctx', min: 200, label: '棋盘绘制' },
   panels: { metric: 'dom', min: 30, label: '面板刷新' },
-  stats: { metric: 'ctx', min: 20, label: '统计图表' }
+  stats: { metric: 'ctx', min: 20, label: '统计图表' },
+  click: { metric: 'hits', min: 2, label: '棋盘点击' }
 };
 
 function requireEntry(debug, name) {
@@ -55,13 +65,32 @@ function requireEntry(debug, name) {
   }
 }
 
+// 用固定种子跑，理由和 verify 一样：布点、地形、初始兵力全靠 Math.random，
+// 不固定的话每次跑的都是不同的局 —— 断言就会时绿时红，而红的原因往往是"这次
+// 敌人恰好离得近"而不是代码坏了（这是实际踩到的：点敌人有时触发攻击分支）。
+// 和 fastBatch 用的是同一个 LCG，跑完必须还原，否则会污染后续用例。
+function withSeed(seed, fn) {
+  const orig = Math.random;
+  let state = seed >>> 0;
+  Math.random = () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+  try {
+    return fn();
+  } finally {
+    Math.random = orig;
+  }
+}
+
 function main() {
   const harness = createHarness(baseConfig(CASES[0].config), { strictCanvas: true, strictDom: true });
   let failed = 0;
-  for (const item of CASES) {
+  CASES.forEach((item, index) => {
     harness.setConfig(baseConfig(item.config));
     try {
-      harness.debug.newGame();
+      // 每个用例一个固定种子（错开，避免几张图长得一样）。
+      withSeed(SEED + index * 2654435761, () => harness.debug.newGame());
       // newGame 在非 fastSim 下把首回合交给 runLoadingScreen 的 setInterval，
       // 绘制不会同步发生 —— 必须显式调这几个入口才能真正命中界面层。
       requireEntry(harness.debug, 'redraw');
@@ -80,6 +109,86 @@ function main() {
       counts.panels = measure(() => harness.debug.repaintUi());
       counts.stats = measure(() => harness.debug.repaintStats());
 
+      // 棋盘点击：onBoard 是玩家唯一的操作入口，分支顺序就是规则本身
+      // （见 src/ui/input.js 文件头）。这里逐类目标各点一次，验证坐标换算和
+      // 派发链路跑得通 —— 顺带把 selectRef → refresh → updatePanels 也带一遍。
+      requireEntry(harness.debug, 'clickCell');
+      const board = harness.debug.summary();
+      let hits = 0;
+
+      // 非观战用例先验一条完整的操作链：选中自己的单位 → 点邻格 → 单位真的动了。
+      // 光验"点了会选中"是不够的 —— 那条路径在观战分支就返回了，移动、攻击、
+      // 装载那几条 if 一条都没走到。
+      //
+      // 必须排在下面的选中测试**之前**：那边点据点时如果据点恰好可达，会顺手
+      // 把单位移过去并耗掉 move，这边就没得动了。
+      //
+      // 要遍历**所有**玩家单位，不能只试第一个：开局是紧密部署，靠地图角落的
+      // 单位可能 8 个邻格里 5 个越界、剩下 3 个被队友占满，一格都动不了 ——
+      // 那是合法局面，不是 bug。（这是实测踩到的：某个种子下第一个单位正好在
+      // 右下角。）
+      if (item.interactive) {
+        const movers = board.units.filter(entry => entry.owner === 'player');
+        if (!movers.length) {
+          throw new Error('关掉观战后仍然没有玩家单位，用例配置有问题');
+        }
+        let moved = false;
+        for (const mover of movers) {
+          // 用 clickCell 的返回值判断，不用 summary —— summary 的 units 不带 id，
+          // 同型号有多个时分不清谁动了。
+          const picked = harness.debug.clickCell(mover.x, mover.y);
+          if (!picked?.id) {
+            continue;
+          }
+          for (let dy = -1; dy <= 1 && !moved; dy++) {
+            for (let dx = -1; dx <= 1 && !moved; dx++) {
+              if (!dx && !dy) {
+                continue;
+              }
+              const after = harness.debug.clickCell(mover.x + dx, mover.y + dy);
+              // 同一个单位 + 坐标变了 = 真的移动了。
+              // 点到队友会换 id；点到走不了的格子会原地不动。两种都不算。
+              moved = !!after && after.id === picked.id && (after.x !== picked.x || after.y !== picked.y);
+            }
+          }
+          if (moved) {
+            break;
+          }
+        }
+        if (!moved) {
+          throw new Error(`试遍了 ${movers.length} 个玩家单位的所有邻格，一个都没动起来（移动派发链多半断了）`);
+        }
+        hits += 1;
+      }
+
+      // 非观战局里不点敌人：如果它正好落在射程内，点击会走"攻击"分支，
+      // 攻击完重新选中的是攻击方而不是目标格，下面那条断言就会随机地假红
+      // （敌人在不在射程内取决于随机布局）。观战局没有这个问题 —— 那边
+      // 一进门就被 spectator 拦住，点谁都只是选中。
+      //
+      // 单位位置可能已被上面的移动测试改掉，所以这里重新取一次 summary。
+      const now = harness.debug.summary();
+      const targets = [
+        now.units.find(entry => entry.owner === 'player'),
+        item.interactive ? null : now.units.find(entry => entry.owner !== 'player'),
+        now.sites[0]
+      ].filter(Boolean);
+      if (targets.length < 2) {
+        throw new Error(`可点的目标只有 ${targets.length} 个，点击测试无从下手`);
+      }
+      let selected = 0;
+      for (const target of targets) {
+        const picked = harness.debug.clickCell(target.x, target.y);
+        // 点在有东西的格子上必然会选中点什么；选不中说明坐标换算错了。
+        if (picked && picked.x === target.x && picked.y === target.y) {
+          selected += 1;
+        }
+      }
+      if (selected < targets.length) {
+        throw new Error(`点了 ${targets.length} 个有目标的格子，只有 ${selected} 个真的选中了（多半是屏幕→格子的坐标换算错了）`);
+      }
+      counts.click = { hits: hits + selected };
+
       const parts = [];
       for (const [layer, limit] of Object.entries(LIMITS)) {
         const actual = counts[layer][limit.metric];
@@ -95,7 +204,7 @@ function main() {
       console.log(`  FAIL ${item.id}`);
       console.log(`       ${(err && err.message) || err}`);
     }
-  }
+  });
   if (failed) {
     console.log(`\n== ❌ ${failed}/${CASES.length} 个用例的界面路径有问题 ==`);
     process.exit(1);
