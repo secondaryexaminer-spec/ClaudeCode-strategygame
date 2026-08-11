@@ -10,7 +10,7 @@
 |---|---|---|
 | `npm run sim` | 手工探查：跑几局看指标，调参时的即时反馈 | 无断言，只出数据 |
 | `npm run sim:suite` | 防**平衡漂移**：胜率是否还在合理区间 | 宽区间（如 25%~75%） |
-| `npm run smoke` | 防**渲染层搬错**：绘制会不会抛错 / 算出 NaN | 只覆盖渲染，不看游戏逻辑 |
+| `npm run smoke` | 防**界面层搬错**：绘制/面板会不会抛错、算出 NaN | 只覆盖界面，不看游戏逻辑 |
 | `npm run verify:fast` | 同下，只跑 4 个单 seed 场景，**约 15 秒** | 零容忍（覆盖面较窄）+ 烟雾 |
 | `npm run verify` | 防**重构搬错**：行为是否与基线逐字段全等 | 零容忍，一个数字都不能变 + 烟雾 |
 
@@ -18,25 +18,52 @@
 跑完还原（见 `src/main.js` 的 `makeRng`）。因此同一组 `(config, seed, rounds, cap)`
 必然产出逐字节相同的结果 —— 这就是纯结构重构所需要的行为等价性证明。
 
-## ⚠️ verify 有一个盲区：渲染层
+## ⚠️ verify 有一个盲区：整个界面层
 
 `refresh()` 开头有 `if (fastSim) return;`，而 `verify` 跑的全是 `fastBatch`。
-**这意味着 `draw()` / `drawMinimap()` / 摄像机换算一行都不会执行** —— 渲染层
-整个删掉，行为基线照样全绿。
+**这意味着 `draw()` / `drawMinimap()` / `updatePanels()` / 摄像机换算一行都不会
+执行** —— `render/` 和 `ui/` 两个目录整个删掉，行为基线照样全绿。
 
 `npm run smoke`（`sim/smoke-render.js`）专门补这个洞，已并入 `verify` 和
-`verify:fast`。它做两件普通烟雾测试不做的事：
+`verify:fast`。它覆盖三层，各自单独计数：
+
+| 层 | 文件 | 度量 | 下限 |
+|---|---|---|---|
+| 棋盘绘制 | `src/render/board.js` | ctx 调用数 | 200（实测 1000+） |
+| 面板刷新 | `src/ui/panels.js` | DOM 写入数 | 30（实测 70~84） |
+| 统计图表 | `src/render/stats.js` | ctx 调用数 | 20（实测 28~38） |
+
+它做三件普通烟雾测试不做的事：
 
 1. **strictCanvas 打桩**。默认的 ctx 打桩是个 Proxy，吞掉一切调用 —— 把 `rt.S`
    写成 `rt.SS` 会让所有坐标变成 `NaN` 而测试照样全绿（**这是实测出来的，不是
    假设**：第一版烟雾测试就没抓住这个错）。strictCanvas 模式下任何 `NaN` /
    `undefined` 参数当场抛错。
-2. **统计 ctx 调用次数**。一张最小的图也有 1500+ 次调用，个位数说明 `draw` 提前
-   返回了。没有这个断言，「绘制没跑」和「绘制没问题」看起来一模一样。
+2. **strictDom 打桩**。面板不画图，它拼字符串写进 `innerHTML` / `textContent`；
+   属性名写错不抛异常，只会让页面上多出一串 `undefined`。strictDom 模式下任何写进
+   这两个属性的 `"undefined"` / `"NaN"` 字面量当场抛错。
+3. **分层计数**。「没抛异常」和「压根没跑」看起来一模一样，所以每层都有调用量下限。
+   **必须分层量**：面板正常写 84 次 DOM、统计面板只写 2 次，合在一起断言总数的话，
+   统计面板整个熄火也能蒙混过关。
 
-它靠 `__frontierDebug.redraw()` 强制同步绘制 —— 正常流程里 `draw()` 要么被
-`fastSim` 挡掉，要么得等 `runLoadingScreen` 的 `setInterval`，两条路都没法在
-测试里同步命中。
+它靠 `__frontierDebug` 的 `redraw()` / `repaintUi()` / `repaintStats()` 强制同步
+执行 —— 正常流程里这些要么被 `fastSim` 挡掉，要么得等 `runLoadingScreen` 的
+`setInterval`，两条路都没法在测试里同步命中。`repaintUi()` 还会依次切换六种选中态
+（无 / 普通单位 / 工程师 / 运兵船 / 据点 / 船厂）各刷一遍，因为面板的分支几乎全挂在
+「当前选中的是什么」上，只刷默认状态等于只覆盖了其中一段。
+
+**这三层的阳性对照都实跑验证过**（改错属性名 → 红、改错函数名 → 红、
+让 `updatePanels` 提前 return → 红）。
+
+### 它测不到什么
+
+别把它当成完整的 UI 测试。已知的边界：
+
+- **`setup()` 里的事件绑定完全没覆盖**（点击、键盘、拖拽、滚轮缩放）。
+- **汇总卡的数字填充测不到**：那段逻辑走 `querySelectorAll('[data-final]')`，
+  打桩的 `querySelectorAll` 恒返回空数组，循环根本进不去。这是打桩的天花板。
+- **布局、样式、文案内容一概不验**。只验「跑得通、不产生 undefined/NaN」。
+
 
 ## 并行执行
 

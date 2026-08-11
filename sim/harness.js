@@ -49,7 +49,7 @@ function baseConfig(overrides = {}) {
   return cfg;
 }
 
-function createHarness(initialConfig = {}, { nocache = false, strictCanvas = false } = {}) {
+function createHarness(initialConfig = {}, { nocache = false, strictCanvas = false, strictDom = false } = {}) {
   const config = {};
   Object.assign(config, initialConfig);
 
@@ -90,6 +90,33 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
   });
 
   const elCache = new Map();
+
+  // strictDom：面板层（src/ui/panels.js）的兜底。
+  //
+  // 它和 strictCanvas 堵的是同一类洞，但手段不同：面板不画图，它拼字符串写进
+  // innerHTML / textContent。写错属性名不会抛异常，只会让页面上出现一串
+  // "undefined" —— 而 DOM 打桩是个哑对象，照单全收。
+  //
+  // 所以这里的断言是：任何写进 innerHTML / textContent 的内容都不许包含
+  // "undefined" / "NaN" 字面量。游戏里的正常文案全是中文和数字，不会误伤。
+  // 如果哪天真有一段合法文案要含这两个词，改断言之前先确认它真的合法。
+  const domStats = { writes: 0 };
+  function checkDomWrite(el, prop, value) {
+    domStats.writes += 1;
+    if (!strictDom) {
+      return;
+    }
+    if (value === undefined || value === null) {
+      throw new Error(`#${el.id}.${prop} 被赋值为 ${value}`);
+    }
+    const text = String(value);
+    const hit = /undefined|NaN/.exec(text);
+    if (hit) {
+      const from = Math.max(0, hit.index - 50);
+      throw new Error(`#${el.id}.${prop} 里出现了 "${hit[0]}"：…${text.slice(from, hit.index + 50)}…`);
+    }
+  }
+
   function elFor(id) {
     if (elCache.has(id)) return elCache.get(id);
     const el = {
@@ -97,7 +124,12 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
       _value: undefined,
       get value() { return this._value !== undefined ? this._value : (config[id] !== undefined ? config[id] : ''); },
       set value(v) { this._value = v; },
-      textContent: '', innerHTML: '', width: 0, height: 0, disabled: false,
+      _text: '', _html: '',
+      get textContent() { return this._text; },
+      set textContent(v) { checkDomWrite(this, 'textContent', v); this._text = v; },
+      get innerHTML() { return this._html; },
+      set innerHTML(v) { checkDomWrite(this, 'innerHTML', v); this._html = v; },
+      width: 0, height: 0, disabled: false,
       classList: { add() {}, remove() {}, toggle() { return false; }, contains() { return false; } },
       style: {}, dataset: {},
       getContext: () => ctxStub,
@@ -153,6 +185,9 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
     // 「绘制压根没跑」—— 后者同样不抛异常，光看有没有报错会误判成通过。
     ctxCalls: () => ctxStats.calls,
     resetCtxCalls: () => { ctxStats.calls = 0; },
+    // 同理，用来区分「面板刷了且没问题」和「面板压根没刷」。
+    domWrites: () => domStats.writes,
+    resetDomWrites: () => { domStats.writes = 0; },
     // Apply a full config for the next scenario (values persist via elFor cache).
     setConfig(next) {
       for (const [id, val] of Object.entries(next)) {

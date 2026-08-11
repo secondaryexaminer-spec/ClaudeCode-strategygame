@@ -2639,6 +2639,276 @@
     return { draw, drawSelection, drawMinimap, clampCam, centerCamOn, minZoom, mapIsPanned };
   }
 
+  // src/render/stats.js
+  function createStatsRenderer(rt) {
+    function chartMetrics() {
+      return [
+        { key: "produced", title: "生产单位数对比" },
+        { key: "kills", title: "击杀数对比" },
+        { key: "losses", title: "伤亡数对比" },
+        { key: "captures", title: "占领据点数对比" },
+        { key: "lostSites", title: "丢失据点数对比" }
+      ];
+    }
+    function statLabel(owner) {
+      return owner === "player" ? "玩家" : `AI ${Number(owner.slice(2)) + 1}`;
+    }
+    function renderStatsSummary(animate = true) {
+      const game = rt.game;
+      if (!game?.stats) {
+        return;
+      }
+      const summary = document.getElementById("statsSummary");
+      if (!summary) {
+        return;
+      }
+      const totalProduced = Object.values(game.stats.produced).reduce((sum, value) => sum + value, 0);
+      const totalKills = Object.values(game.stats.kills).reduce((sum, value) => sum + value, 0);
+      const totalLosses = Object.values(game.stats.losses).reduce((sum, value) => sum + value, 0);
+      const totalCaptures = Object.values(game.stats.captures).reduce((sum, value) => sum + value, 0);
+      const totalLost = Object.values(game.stats.lostSites).reduce((sum, value) => sum + value, 0);
+      const items = [
+        { label: "本局时长", value: rt.statTimeSeconds(), suffix: "s" },
+        { label: "总生产数", value: totalProduced, suffix: "" },
+        { label: "总击杀数", value: totalKills, suffix: "" },
+        { label: "总伤亡数", value: totalLosses, suffix: "" },
+        { label: "总占领数", value: totalCaptures, suffix: "" },
+        { label: "总丢失数", value: totalLost, suffix: "" }
+      ];
+      summary.innerHTML = items.map((item, index) => `<div class="summary-card"><span class="label">${item.label}</span><span class="value" data-stat-index="${index}" data-final="${item.value}" data-suffix="${item.suffix}">0${item.suffix}</span></div>`).join("");
+      if (!animate) {
+        summary.querySelectorAll("[data-final]").forEach((node) => {
+          node.textContent = `${node.dataset.final}${node.dataset.suffix || ""}`;
+        });
+        return;
+      }
+      const start = performance.now();
+      const duration = 600;
+      const values = [...summary.querySelectorAll("[data-final]")];
+      function tick(now) {
+        const progress = Math.min(1, (now - start) / duration);
+        values.forEach((node) => {
+          const target = Number(node.dataset.final || 0);
+          node.textContent = `${Math.round(target * progress)}${node.dataset.suffix || ""}`;
+        });
+        if (progress < 1) {
+          requestAnimationFrame(tick);
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+    function drawStatsChart() {
+      const game = rt.game;
+      if (!game?.stats) {
+        return;
+      }
+      const canvasEl = document.getElementById("statsChart");
+      const titleEl = document.getElementById("chartTitle");
+      if (!canvasEl || !titleEl) {
+        return;
+      }
+      const metric = chartMetrics()[game.stats.chartIndex % chartMetrics().length];
+      titleEl.textContent = metric.title;
+      const chartCtx = canvasEl.getContext("2d");
+      const width = canvasEl.width;
+      const height = canvasEl.height;
+      chartCtx.clearRect(0, 0, width, height);
+      chartCtx.fillStyle = "#101820";
+      chartCtx.fillRect(0, 0, width, height);
+      chartCtx.strokeStyle = "rgba(255,255,255,0.08)";
+      chartCtx.lineWidth = 1;
+      for (let i = 0; i < 5; i++) {
+        const y = 20 + i * (height - 40) / 4;
+        chartCtx.beginPath();
+        chartCtx.moveTo(40, y);
+        chartCtx.lineTo(width - 10, y);
+        chartCtx.stroke();
+      }
+      const history = game.stats.history.length ? game.stats.history : [{ time: 0, [metric.key]: { ...game.stats[metric.key] } }];
+      const maxTime = Math.max(1, ...history.map((point) => point.time));
+      const maxValue = Math.max(1, ...history.flatMap((point) => Object.values(point[metric.key] || {})));
+      rt.ownerOrder().forEach((owner) => {
+        chartCtx.strokeStyle = rt.ownerColor(owner);
+        chartCtx.lineWidth = 2;
+        chartCtx.beginPath();
+        history.forEach((point, index) => {
+          const x = 40 + point.time / maxTime * (width - 60);
+          const y = height - 20 - (point[metric.key]?.[owner] || 0) / maxValue * (height - 40);
+          if (index === 0) {
+            chartCtx.moveTo(x, y);
+          } else {
+            chartCtx.lineTo(x, y);
+          }
+        });
+        chartCtx.stroke();
+        chartCtx.fillStyle = rt.ownerColor(owner);
+        chartCtx.fillRect(width - 130, 16 + rt.ownerOrder().indexOf(owner) * 16, 10, 10);
+        chartCtx.fillStyle = "#d8e6f7";
+        chartCtx.font = "11px sans-serif";
+        chartCtx.fillText(statLabel(owner), width - 115, 25 + rt.ownerOrder().indexOf(owner) * 16);
+      });
+      chartCtx.fillStyle = "#8b9bb0";
+      chartCtx.font = "11px sans-serif";
+      chartCtx.fillText("时间", width / 2 - 10, height - 6);
+    }
+    return { chartMetrics, statLabel, renderStatsSummary, drawStatsChart };
+  }
+
+  // src/ui/panels.js
+  function createPanels(rt) {
+    const $ = (id) => document.getElementById(id);
+    const uiState = {
+      shipyardCargo: ["none", "none", "none", "none", "none"],
+      engineerCargo: ["none", "none", "none", "none", "none"]
+    };
+    function transportConfigMarkup(presetKey, title) {
+      const capacity = typeMeta("transport").transport;
+      const rows = [];
+      for (let slot = 0; slot < capacity; slot++) {
+        const options = ["none", ...cargoOptionTypes()].map((type) => `<option value="${type}" ${uiState[presetKey][slot] === type ? "selected" : ""}>${cargoLabel(type)}</option>`).join("");
+        rows.push(`<label class="cargo-row"><span>槽位${slot + 1}</span><select data-cargo-preset="${presetKey}" data-cargo-slot="${slot}">${options}</select></label>`);
+      }
+      return [
+        '<div class="build-config">',
+        `<h3>${title}</h3>`,
+        '<div class="cargo-grid">',
+        rows.join(""),
+        "</div>",
+        `<div class="config-note">当前配置：${describeCargo(uiState[presetKey])} · 总价 ${transportCost(uiState[presetKey])} 🪙</div>`,
+        "</div>"
+      ].join("");
+    }
+    function setCargoPreset(presetKey, slot, value) {
+      if (!uiState[presetKey]) {
+        return;
+      }
+      uiState[presetKey][slot] = value;
+    }
+    function engineerSelected() {
+      return rt.game?.selected?.kind === "unit" && rt.game.selected.ref.type === "engineer" ? rt.game.selected.ref : null;
+    }
+    function updatePanels() {
+      const game = rt.game;
+      $("gold").textContent = game.settings?.spectator ? game.goldByOwner[game.side] ?? 0 : game.goldByOwner.player;
+      $("turn").textContent = game.turn;
+      $("sideLabel").textContent = rt.sideLabel();
+      $("sideLabel").classList.toggle("enemy", game.side !== "player");
+      $("btnEndTurn").disabled = game.settings?.spectator || game.side !== "player" || game.over;
+      const activeUnit = rt.selectedUnit();
+      const activeSite = rt.selectedSite();
+      $("selectionEmpty").classList.toggle("hidden", !!activeUnit || !!activeSite);
+      $("selectionBody").classList.toggle("hidden", !activeUnit);
+      if (activeUnit) {
+        const unitEntry = activeUnit;
+        const meta = typeMeta(unitEntry.type);
+        const siteEntry = rt.getSite(unitEntry.x, unitEntry.y);
+        const attackBuff = rt.siteBonus(siteEntry, unitEntry, "attack");
+        const defenseBuff = rt.siteBonus(siteEntry, unitEntry, "defense");
+        $("selIcon").textContent = meta.icon;
+        $("selName").textContent = meta.name;
+        $("selOwner").textContent = rt.ownerName(unitEntry.owner);
+        $("selHp").textContent = `${unitEntry.hp}/${unitEntry.maxHp}`;
+        $("selMove").textContent = `${Math.floor(unitEntry.move)}/${unitEntry.maxMove}`;
+        $("selHpBar").style.width = `${unitEntry.hp / unitEntry.maxHp * 100}%`;
+        $("selMoveBar").style.width = `${unitEntry.move / unitEntry.maxMove * 100}%`;
+        $("selAttrs").innerHTML = [
+          `<div><span>军种：</span>${rt.domainName(meta.domain)}</div>`,
+          `<div><span>射程：</span>${meta.range}</div>`,
+          `<div><span>等级：</span>${unitEntry.rank}</div>`,
+          `<div><span>击杀：</span>${unitEntry.kills}</div>`,
+          `<div><span>攻击：</span>${meta.atk + attackBuff}</div>`,
+          `<div><span>防御：</span>${meta.def + defenseBuff}</div>`,
+          `<div><span>状态：</span>${unitEntry.hasAttacked ? "已攻击" : unitEntry.move < unitEntry.maxMove ? "已机动" : "待命"}</div>`,
+          `<div><span>特性：</span>${meta.transport ? `载员 ${unitEntry.cargo.length}/${meta.transport}` : meta.text}</div>`
+        ].join("");
+        const actions = [];
+        if (meta.transport) {
+          actions.push(`<button class="btn" data-unit-action="load" ${unitEntry.cargo.length >= meta.transport ? "disabled" : ""}>装载邻近陆军</button>`);
+          actions.push(`<button class="btn" data-unit-action="unload" ${unitEntry.cargo.length ? "" : "disabled"}>自动卸载到临近空地</button>`);
+        }
+        if (unitEntry.owner === "player" && game.side === "player") {
+          actions.push(`<button class="btn" data-unit-action="sell">变卖回收 ${rt.sellRefund(unitEntry)} 🪙</button>`);
+        }
+        const cellStack = rt.unitsAt(unitEntry.x, unitEntry.y);
+        if (cellStack.length > 1) {
+          actions.push(`<div class="config-note">同格单位（${cellStack.length}）：</div>`);
+          cellStack.forEach((entry) => {
+            actions.push(`<button class="btn" data-select-unit="${entry.id}" ${entry === unitEntry ? "disabled" : ""}>${typeMeta(entry.type).icon} ${typeMeta(entry.type).name}</button>`);
+          });
+        }
+        $("selActions").innerHTML = actions.join("");
+        let selectionHint = meta.text;
+        if (game.pendingOrder?.kind === "engineer-launch" && unitEntry.id === game.pendingOrder.builderId) {
+          const productText = game.pendingOrder.product === "transport" ? `运兵船（${describeCargo(game.pendingOrder.cargoTypes)}）` : typeMeta(game.pendingOrder.product).name;
+          selectionHint = `已选择建造${productText}，请点击相邻海格下水。`;
+        } else if (siteEntry) {
+          const attackText = attackBuff ? `攻击 +${attackBuff}` : "";
+          const defenseText = defenseBuff ? `防御 +${defenseBuff}` : "";
+          const joinText = attackText && defenseText ? "，" : "";
+          selectionHint = `${siteEntry.name}提供${attackText}${joinText}${defenseText}。`;
+        }
+        $("selHint").textContent = selectionHint;
+      } else {
+        $("selActions").innerHTML = "";
+      }
+      const engineer = engineerSelected();
+      $("engineerCard").classList.toggle("hidden", !engineer || game.side !== "player");
+      if (engineer && game.side === "player") {
+        const coastCells = rt.engineerBuildCells(engineer);
+        const warshipDisabled = coastCells.length && game.goldByOwner.player >= typeMeta("warship").cost && !engineer.acted ? "" : "disabled";
+        const transportDisabled = coastCells.length && game.goldByOwner.player >= transportCost(uiState.engineerCargo) && !engineer.acted ? "" : "disabled";
+        const campDisabled = rt.canBuildCamp(engineer) ? "" : "disabled";
+        const engineerPendingText = game.pendingOrder?.kind === "engineer-launch" && game.pendingOrder.builderId === engineer.id ? "待下水：点击高亮海格完成建造。" : coastCells.length ? "海边施工可用。" : "先移动到靠海陆格，才能下水建造舰船。";
+        $("engineerBody").innerHTML = [
+          '<div class="engineer-panel">',
+          `<h3>${typeMeta(engineer.type).icon} ${typeMeta(engineer.type).name}</h3>`,
+          `<div class="config-note">工程师可在相邻海格建造舰船，也可在当前位置建立可维持 ${CAMP_DURATION} 回合的临时营地。</div>`,
+          transportConfigMarkup("engineerCargo", "工程师运兵船预载"),
+          '<div class="engineer-actions">',
+          `<button class="btn" data-engineer-build="warship" ${warshipDisabled}>在相邻海格建造战船（${typeMeta("warship").cost} 🪙）</button>`,
+          `<button class="btn" data-engineer-build="transport" ${transportDisabled}>在相邻海格建造运兵船（${transportCost(uiState.engineerCargo)} 🪙）</button>`,
+          `<button class="btn" data-engineer-build="camp" ${campDisabled}>建立临时营地（${CAMP_COST} 🪙）</button>`,
+          "</div>",
+          `<div class="engineer-pending">${engineerPendingText}</div>`,
+          "</div>"
+        ].join("");
+      } else {
+        $("engineerBody").innerHTML = "";
+      }
+      const showSite = !!activeSite;
+      const manageable = !!activeSite && activeSite.owner === "player" && game.side === "player";
+      $("buildEmpty").classList.toggle("hidden", showSite);
+      $("buildBody").classList.toggle("hidden", !showSite);
+      if (showSite) {
+        const siteEntry = activeSite;
+        const occupant = rt.getUnit(siteEntry.x, siteEntry.y);
+        const cost = siteEntry.kind === "city" || siteEntry.kind === "camp" ? 5 : siteEntry.kind === "shipyard" ? 6 : 7;
+        $("cityName").textContent = siteEntry.name;
+        $("cityTier").textContent = `${rt.tierName(siteEntry.tier)}${siteMeta(siteEntry.kind).name}`;
+        $("cityIncome").textContent = `+${siteEntry.income}`;
+        $("cityBonus").textContent = siteEntry.kind === "city" ? `生产陆军，驻军攻击 +${siteEntry.tier}，防御 +${siteEntry.tier * 2}。` : siteEntry.kind === "shipyard" ? `生产海军；运兵船可直接预载 0~5 个陆军单位下水。` : siteEntry.kind === "camp" ? `视为中级城市，不产金币，可存在 ${siteEntry.duration ?? CAMP_DURATION} 回合。` : siteEntry.kind.startsWith("oil") ? `不可升级、不可造兵；每回合收益 ${siteEntry.income} 🪙。` : siteEntry.kind.startsWith("barracks") ? `不可升级、不可产金币；驻军加成等同 ${siteMeta(siteEntry.kind).supportTier} 级普通据点。` : "海上堡垒不可生产单位，但提供海上防御。";
+        $("btnUpgrade").textContent = siteEntry.tier < siteMeta(siteEntry.kind).maxTier ? `升级至${rt.tierName(siteEntry.tier + 1)}（${rt.siteUpgradeCost(siteEntry)} 🪙）` : "已达最高等级";
+        $("btnUpgrade").disabled = !manageable || siteEntry.tier >= siteMeta(siteEntry.kind).maxTier || game.goldByOwner.player < rt.siteUpgradeCost(siteEntry);
+        $("btnFullHeal").textContent = occupant ? `花费${cost}金币：驻军修整` : "当前据点无驻军";
+        $("btnFullHeal").disabled = !manageable || !occupant || game.goldByOwner.player < cost;
+        $("shipyardConfig").classList.toggle("hidden", siteEntry.kind !== "shipyard");
+        $("shipyardConfig").innerHTML = siteEntry.kind === "shipyard" ? transportConfigMarkup("shipyardCargo", "运兵船预载") : "";
+        const types = rt.buildableTypes(siteEntry);
+        $("buildGrid").innerHTML = types.length ? types.map((type) => {
+          const costText = type === "transport" ? transportCost(uiState.shipyardCargo) : typeMeta(type).cost;
+          const disabled = !manageable || game.goldByOwner.player < costText || rt.getUnit(siteEntry.x, siteEntry.y);
+          const suffix = type === "transport" ? `<small> 预载：${describeCargo(uiState.shipyardCargo)}</small>` : `<small> ${rt.domainName(typeMeta(type).domain)} ${rt.tierName(typeMeta(type).level)}</small>`;
+          return `<button class="btn build" data-type="${type}" ${disabled ? "disabled" : ""}><span>${typeMeta(type).icon} ${typeMeta(type).name}${suffix}</span><span class="cost">${costText} 🪙</span></button>`;
+        }).join("") : '<div class="muted">该据点不能生产单位。</div>';
+      } else {
+        $("shipyardConfig").classList.add("hidden");
+        $("shipyardConfig").innerHTML = "";
+      }
+      $("log").innerHTML = game.logs.map((entry) => `<div class="entry ${entry.kind}">${entry.text}</div>`).join("");
+    }
+    return { uiState, updatePanels, transportConfigMarkup, setCargoPreset, engineerSelected };
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -2657,10 +2927,6 @@
     let toastTimer = null;
     let game = null;
     let fastSim = false;
-    const uiState = {
-      shipyardCargo: ["none", "none", "none", "none", "none"],
-      engineerCargo: ["none", "none", "none", "none", "none"]
-    };
     function inBounds2(x, y) {
       return inBounds(W, H, x, y);
     }
@@ -2847,114 +3113,6 @@
       }
       bucket[key] += value;
     }
-    function chartMetrics() {
-      return [
-        { key: "produced", title: "生产单位数对比" },
-        { key: "kills", title: "击杀数对比" },
-        { key: "losses", title: "伤亡数对比" },
-        { key: "captures", title: "占领据点数对比" },
-        { key: "lostSites", title: "丢失据点数对比" }
-      ];
-    }
-    function statLabel(owner) {
-      return owner === "player" ? "玩家" : `AI ${Number(owner.slice(2)) + 1}`;
-    }
-    function renderStatsSummary(animate = true) {
-      if (!game?.stats) {
-        return;
-      }
-      const summary = document.getElementById("statsSummary");
-      if (!summary) {
-        return;
-      }
-      const totalProduced = Object.values(game.stats.produced).reduce((sum, value) => sum + value, 0);
-      const totalKills = Object.values(game.stats.kills).reduce((sum, value) => sum + value, 0);
-      const totalLosses = Object.values(game.stats.losses).reduce((sum, value) => sum + value, 0);
-      const totalCaptures = Object.values(game.stats.captures).reduce((sum, value) => sum + value, 0);
-      const totalLost = Object.values(game.stats.lostSites).reduce((sum, value) => sum + value, 0);
-      const items = [
-        { label: "本局时长", value: statTimeSeconds(), suffix: "s" },
-        { label: "总生产数", value: totalProduced, suffix: "" },
-        { label: "总击杀数", value: totalKills, suffix: "" },
-        { label: "总伤亡数", value: totalLosses, suffix: "" },
-        { label: "总占领数", value: totalCaptures, suffix: "" },
-        { label: "总丢失数", value: totalLost, suffix: "" }
-      ];
-      summary.innerHTML = items.map((item, index) => `<div class="summary-card"><span class="label">${item.label}</span><span class="value" data-stat-index="${index}" data-final="${item.value}" data-suffix="${item.suffix}">0${item.suffix}</span></div>`).join("");
-      if (!animate) {
-        summary.querySelectorAll("[data-final]").forEach((node) => {
-          node.textContent = `${node.dataset.final}${node.dataset.suffix || ""}`;
-        });
-        return;
-      }
-      const start = performance.now();
-      const duration = 600;
-      const values = [...summary.querySelectorAll("[data-final]")];
-      function tick(now) {
-        const progress = Math.min(1, (now - start) / duration);
-        values.forEach((node) => {
-          const target = Number(node.dataset.final || 0);
-          node.textContent = `${Math.round(target * progress)}${node.dataset.suffix || ""}`;
-        });
-        if (progress < 1) {
-          requestAnimationFrame(tick);
-        }
-      }
-      requestAnimationFrame(tick);
-    }
-    function drawStatsChart() {
-      if (!game?.stats) {
-        return;
-      }
-      const canvasEl = document.getElementById("statsChart");
-      const titleEl = document.getElementById("chartTitle");
-      if (!canvasEl || !titleEl) {
-        return;
-      }
-      const metric = chartMetrics()[game.stats.chartIndex % chartMetrics().length];
-      titleEl.textContent = metric.title;
-      const chartCtx = canvasEl.getContext("2d");
-      const width = canvasEl.width;
-      const height = canvasEl.height;
-      chartCtx.clearRect(0, 0, width, height);
-      chartCtx.fillStyle = "#101820";
-      chartCtx.fillRect(0, 0, width, height);
-      chartCtx.strokeStyle = "rgba(255,255,255,0.08)";
-      chartCtx.lineWidth = 1;
-      for (let i = 0; i < 5; i++) {
-        const y = 20 + i * (height - 40) / 4;
-        chartCtx.beginPath();
-        chartCtx.moveTo(40, y);
-        chartCtx.lineTo(width - 10, y);
-        chartCtx.stroke();
-      }
-      const history = game.stats.history.length ? game.stats.history : [{ time: 0, [metric.key]: { ...game.stats[metric.key] } }];
-      const maxTime = Math.max(1, ...history.map((point) => point.time));
-      const maxValue = Math.max(1, ...history.flatMap((point) => Object.values(point[metric.key] || {})));
-      ownerOrder().forEach((owner) => {
-        chartCtx.strokeStyle = ownerColor(owner);
-        chartCtx.lineWidth = 2;
-        chartCtx.beginPath();
-        history.forEach((point, index) => {
-          const x = 40 + point.time / maxTime * (width - 60);
-          const y = height - 20 - (point[metric.key]?.[owner] || 0) / maxValue * (height - 40);
-          if (index === 0) {
-            chartCtx.moveTo(x, y);
-          } else {
-            chartCtx.lineTo(x, y);
-          }
-        });
-        chartCtx.stroke();
-        chartCtx.fillStyle = ownerColor(owner);
-        chartCtx.fillRect(width - 130, 16 + ownerOrder().indexOf(owner) * 16, 10, 10);
-        chartCtx.fillStyle = "#d8e6f7";
-        chartCtx.font = "11px sans-serif";
-        chartCtx.fillText(statLabel(owner), width - 115, 25 + ownerOrder().indexOf(owner) * 16);
-      });
-      chartCtx.fillStyle = "#8b9bb0";
-      chartCtx.font = "11px sans-serif";
-      chartCtx.fillText("时间", width / 2 - 10, height - 6);
-    }
     function showStatsPanel() {
       if (!game?.stats) {
         return;
@@ -3093,32 +3251,6 @@
         log(`${ownerName(unitEntry.owner)}的${typeMeta(unitEntry.type).name}晋升为 ${nextRank} 级老兵。`, "system");
       }
     }
-    function transportConfigMarkup(presetKey, title) {
-      const capacity = typeMeta("transport").transport;
-      const rows = [];
-      for (let slot = 0; slot < capacity; slot++) {
-        const options = ["none", ...cargoOptionTypes()].map((type) => `<option value="${type}" ${uiState[presetKey][slot] === type ? "selected" : ""}>${cargoLabel(type)}</option>`).join("");
-        rows.push(`<label class="cargo-row"><span>槽位${slot + 1}</span><select data-cargo-preset="${presetKey}" data-cargo-slot="${slot}">${options}</select></label>`);
-      }
-      return [
-        '<div class="build-config">',
-        `<h3>${title}</h3>`,
-        '<div class="cargo-grid">',
-        rows.join(""),
-        "</div>",
-        `<div class="config-note">当前配置：${describeCargo(uiState[presetKey])} · 总价 ${transportCost(uiState[presetKey])} 🪙</div>`,
-        "</div>"
-      ].join("");
-    }
-    function setCargoPreset(presetKey, slot, value) {
-      if (!uiState[presetKey]) {
-        return;
-      }
-      uiState[presetKey][slot] = value;
-    }
-    function engineerSelected() {
-      return game?.selected?.kind === "unit" && game.selected.ref.type === "engineer" ? game.selected.ref : null;
-    }
     function clearPendingOrder() {
       if (game) {
         game.pendingOrder = null;
@@ -3165,6 +3297,11 @@
       ownerColor,
       selectedUnit,
       selectedSite,
+      statTimeSeconds,
+      domainName,
+      sideLabel: () => turnApi.sideLabel(),
+      siteBonus: (siteEntry, unitEntry, key) => combatApi.siteBonus(siteEntry, unitEntry, key),
+      sellRefund: (unitEntry) => buildApi.sellRefund(unitEntry),
       get currentSaveKey() {
         return currentSaveKey;
       },
@@ -3375,6 +3512,14 @@
       minZoom,
       mapIsPanned
     } = createBoardRenderer(rt);
+    const { chartMetrics, statLabel, renderStatsSummary, drawStatsChart } = createStatsRenderer(rt);
+    const {
+      uiState,
+      updatePanels,
+      transportConfigMarkup,
+      setCargoPreset,
+      engineerSelected
+    } = createPanels(rt);
     function log(text, kind = "") {
       game.logs.push({ text, kind });
       if (game.logs.length > 80) {
@@ -3518,125 +3663,6 @@
     function dominantCityTeam() {
       const cityTeams = [...new Set(game.sites.filter((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral").map((siteEntry) => teamOf(siteEntry.owner)))];
       return cityTeams.length === 1 ? cityTeams[0] : null;
-    }
-    function updatePanels() {
-      $("gold").textContent = game.settings?.spectator ? game.goldByOwner[game.side] ?? 0 : game.goldByOwner.player;
-      $("turn").textContent = game.turn;
-      $("sideLabel").textContent = sideLabel();
-      $("sideLabel").classList.toggle("enemy", game.side !== "player");
-      $("btnEndTurn").disabled = game.settings?.spectator || game.side !== "player" || game.over;
-      const selected = game.selected;
-      const activeUnit = selectedUnit();
-      const activeSite = selectedSite();
-      $("selectionEmpty").classList.toggle("hidden", !!activeUnit || !!activeSite);
-      $("selectionBody").classList.toggle("hidden", !activeUnit);
-      if (activeUnit) {
-        const unitEntry = activeUnit;
-        const meta = typeMeta(unitEntry.type);
-        const siteEntry = getSite(unitEntry.x, unitEntry.y);
-        const attackBuff = siteBonus(siteEntry, unitEntry, "attack");
-        const defenseBuff = siteBonus(siteEntry, unitEntry, "defense");
-        $("selIcon").textContent = meta.icon;
-        $("selName").textContent = meta.name;
-        $("selOwner").textContent = ownerName(unitEntry.owner);
-        $("selHp").textContent = `${unitEntry.hp}/${unitEntry.maxHp}`;
-        $("selMove").textContent = `${Math.floor(unitEntry.move)}/${unitEntry.maxMove}`;
-        $("selHpBar").style.width = `${unitEntry.hp / unitEntry.maxHp * 100}%`;
-        $("selMoveBar").style.width = `${unitEntry.move / unitEntry.maxMove * 100}%`;
-        $("selAttrs").innerHTML = [
-          `<div><span>军种：</span>${domainName(meta.domain)}</div>`,
-          `<div><span>射程：</span>${meta.range}</div>`,
-          `<div><span>等级：</span>${unitEntry.rank}</div>`,
-          `<div><span>击杀：</span>${unitEntry.kills}</div>`,
-          `<div><span>攻击：</span>${meta.atk + attackBuff}</div>`,
-          `<div><span>防御：</span>${meta.def + defenseBuff}</div>`,
-          `<div><span>状态：</span>${unitEntry.hasAttacked ? "已攻击" : unitEntry.move < unitEntry.maxMove ? "已机动" : "待命"}</div>`,
-          `<div><span>特性：</span>${meta.transport ? `载员 ${unitEntry.cargo.length}/${meta.transport}` : meta.text}</div>`
-        ].join("");
-        const actions = [];
-        if (meta.transport) {
-          actions.push(`<button class="btn" data-unit-action="load" ${unitEntry.cargo.length >= meta.transport ? "disabled" : ""}>装载邻近陆军</button>`);
-          actions.push(`<button class="btn" data-unit-action="unload" ${unitEntry.cargo.length ? "" : "disabled"}>自动卸载到临近空地</button>`);
-        }
-        if (unitEntry.owner === "player" && game.side === "player") {
-          actions.push(`<button class="btn" data-unit-action="sell">变卖回收 ${sellRefund(unitEntry)} 🪙</button>`);
-        }
-        const cellStack = unitsAt(unitEntry.x, unitEntry.y);
-        if (cellStack.length > 1) {
-          actions.push(`<div class="config-note">同格单位（${cellStack.length}）：</div>`);
-          cellStack.forEach((entry) => {
-            actions.push(`<button class="btn" data-select-unit="${entry.id}" ${entry === unitEntry ? "disabled" : ""}>${typeMeta(entry.type).icon} ${typeMeta(entry.type).name}</button>`);
-          });
-        }
-        $("selActions").innerHTML = actions.join("");
-        let selectionHint = meta.text;
-        if (game.pendingOrder?.kind === "engineer-launch" && unitEntry.id === game.pendingOrder.builderId) {
-          const productText = game.pendingOrder.product === "transport" ? `运兵船（${describeCargo(game.pendingOrder.cargoTypes)}）` : typeMeta(game.pendingOrder.product).name;
-          selectionHint = `已选择建造${productText}，请点击相邻海格下水。`;
-        } else if (siteEntry) {
-          const attackText = attackBuff ? `攻击 +${attackBuff}` : "";
-          const defenseText = defenseBuff ? `防御 +${defenseBuff}` : "";
-          const joinText = attackText && defenseText ? "，" : "";
-          selectionHint = `${siteEntry.name}提供${attackText}${joinText}${defenseText}。`;
-        }
-        $("selHint").textContent = selectionHint;
-      } else {
-        $("selActions").innerHTML = "";
-      }
-      const engineer = engineerSelected();
-      $("engineerCard").classList.toggle("hidden", !engineer || game.side !== "player");
-      if (engineer && game.side === "player") {
-        const coastCells = engineerBuildCells(engineer);
-        const warshipDisabled = coastCells.length && game.goldByOwner.player >= typeMeta("warship").cost && !engineer.acted ? "" : "disabled";
-        const transportDisabled = coastCells.length && game.goldByOwner.player >= transportCost(uiState.engineerCargo) && !engineer.acted ? "" : "disabled";
-        const campDisabled = canBuildCamp(engineer) ? "" : "disabled";
-        const engineerPendingText = game.pendingOrder?.kind === "engineer-launch" && game.pendingOrder.builderId === engineer.id ? "待下水：点击高亮海格完成建造。" : coastCells.length ? "海边施工可用。" : "先移动到靠海陆格，才能下水建造舰船。";
-        $("engineerBody").innerHTML = [
-          '<div class="engineer-panel">',
-          `<h3>${typeMeta(engineer.type).icon} ${typeMeta(engineer.type).name}</h3>`,
-          `<div class="config-note">工程师可在相邻海格建造舰船，也可在当前位置建立可维持 ${CAMP_DURATION} 回合的临时营地。</div>`,
-          transportConfigMarkup("engineerCargo", "工程师运兵船预载"),
-          '<div class="engineer-actions">',
-          `<button class="btn" data-engineer-build="warship" ${warshipDisabled}>在相邻海格建造战船（${typeMeta("warship").cost} 🪙）</button>`,
-          `<button class="btn" data-engineer-build="transport" ${transportDisabled}>在相邻海格建造运兵船（${transportCost(uiState.engineerCargo)} 🪙）</button>`,
-          `<button class="btn" data-engineer-build="camp" ${campDisabled}>建立临时营地（${CAMP_COST} 🪙）</button>`,
-          "</div>",
-          `<div class="engineer-pending">${engineerPendingText}</div>`,
-          "</div>"
-        ].join("");
-      } else {
-        $("engineerBody").innerHTML = "";
-      }
-      const showSite = !!activeSite;
-      const manageable = !!activeSite && activeSite.owner === "player" && game.side === "player";
-      $("buildEmpty").classList.toggle("hidden", showSite);
-      $("buildBody").classList.toggle("hidden", !showSite);
-      if (showSite) {
-        const siteEntry = activeSite;
-        const occupant = getUnit(siteEntry.x, siteEntry.y);
-        const cost = siteEntry.kind === "city" || siteEntry.kind === "camp" ? 5 : siteEntry.kind === "shipyard" ? 6 : 7;
-        $("cityName").textContent = siteEntry.name;
-        $("cityTier").textContent = `${tierName(siteEntry.tier)}${siteMeta(siteEntry.kind).name}`;
-        $("cityIncome").textContent = `+${siteEntry.income}`;
-        $("cityBonus").textContent = siteEntry.kind === "city" ? `生产陆军，驻军攻击 +${siteEntry.tier}，防御 +${siteEntry.tier * 2}。` : siteEntry.kind === "shipyard" ? `生产海军；运兵船可直接预载 0~5 个陆军单位下水。` : siteEntry.kind === "camp" ? `视为中级城市，不产金币，可存在 ${siteEntry.duration ?? CAMP_DURATION} 回合。` : siteEntry.kind.startsWith("oil") ? `不可升级、不可造兵；每回合收益 ${siteEntry.income} 🪙。` : siteEntry.kind.startsWith("barracks") ? `不可升级、不可产金币；驻军加成等同 ${siteMeta(siteEntry.kind).supportTier} 级普通据点。` : "海上堡垒不可生产单位，但提供海上防御。";
-        $("btnUpgrade").textContent = siteEntry.tier < siteMeta(siteEntry.kind).maxTier ? `升级至${tierName(siteEntry.tier + 1)}（${siteUpgradeCost(siteEntry)} 🪙）` : "已达最高等级";
-        $("btnUpgrade").disabled = !manageable || siteEntry.tier >= siteMeta(siteEntry.kind).maxTier || game.goldByOwner.player < siteUpgradeCost(siteEntry);
-        $("btnFullHeal").textContent = occupant ? `花费${cost}金币：驻军修整` : "当前据点无驻军";
-        $("btnFullHeal").disabled = !manageable || !occupant || game.goldByOwner.player < cost;
-        $("shipyardConfig").classList.toggle("hidden", siteEntry.kind !== "shipyard");
-        $("shipyardConfig").innerHTML = siteEntry.kind === "shipyard" ? transportConfigMarkup("shipyardCargo", "运兵船预载") : "";
-        const types = buildableTypes(siteEntry);
-        $("buildGrid").innerHTML = types.length ? types.map((type) => {
-          const costText = type === "transport" ? transportCost(uiState.shipyardCargo) : typeMeta(type).cost;
-          const disabled = !manageable || game.goldByOwner.player < costText || getUnit(siteEntry.x, siteEntry.y);
-          const suffix = type === "transport" ? `<small> 预载：${describeCargo(uiState.shipyardCargo)}</small>` : `<small> ${domainName(typeMeta(type).domain)} ${tierName(typeMeta(type).level)}</small>`;
-          return `<button class="btn build" data-type="${type}" ${disabled ? "disabled" : ""}><span>${typeMeta(type).icon} ${typeMeta(type).name}${suffix}</span><span class="cost">${costText} 🪙</span></button>`;
-        }).join("") : '<div class="muted">该据点不能生产单位。</div>';
-      } else {
-        $("shipyardConfig").classList.add("hidden");
-        $("shipyardConfig").innerHTML = "";
-      }
-      $("log").innerHTML = game.logs.map((entry) => `<div class="entry ${entry.kind}">${entry.text}</div>`).join("");
     }
     function refresh() {
       if (fastSim) {
@@ -4587,6 +4613,51 @@
             return false;
           }
           draw();
+          return true;
+        },
+        // 同上，但覆盖面板层（src/ui/panels.js）。
+        //
+        // 面板的分支几乎全挂在「当前选中的是什么」上：没选中 / 选中普通单位 /
+        // 选中工程师 / 选中运兵船 / 选中据点 / 选中船厂，各走一段不同的代码。
+        // 只刷一次默认状态（没选中）等于只覆盖了其中一段，剩下的照样是盲区。
+        // 所以这里逐个换选中态各刷一遍，最后清空还原。
+        //
+        // 直接写 game.selected 而不是走 selectRef()：selectRef 会顺手清掉
+        // pendingOrder，属于操作语义；这里只想触发重绘，不想改游戏状态。
+        repaintUi: () => {
+          if (!game) {
+            return false;
+          }
+          const prevSelected = game.selected;
+          const pickUnit = (predicate) => game.units.find(predicate) || null;
+          const refs = [
+            { kind: "unit", ref: pickUnit((entry) => entry.owner === "player") || game.units[0] || null },
+            { kind: "unit", ref: pickUnit((entry) => entry.type === "engineer") },
+            { kind: "unit", ref: pickUnit((entry) => typeMeta(entry.type).transport) },
+            { kind: "site", ref: game.sites[0] || null },
+            { kind: "site", ref: game.sites.find((entry) => entry.kind === "shipyard") || null },
+            { kind: null, ref: null }
+          ];
+          for (const item of refs) {
+            game.selected = item.ref ? {
+              kind: item.kind,
+              ref: item.ref,
+              unit: item.kind === "unit" ? item.ref : getUnit(item.ref.x, item.ref.y),
+              site: item.kind === "site" ? item.ref : getSite(item.ref.x, item.ref.y)
+            } : null;
+            refresh();
+          }
+          game.selected = prevSelected;
+          refresh();
+          return true;
+        },
+        // 统计面板也在 fastSim 短路之后，同样需要一个同步入口。
+        repaintStats: () => {
+          if (!game) {
+            return false;
+          }
+          renderStatsSummary(false);
+          drawStatsChart();
           return true;
         }
       };
