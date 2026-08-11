@@ -108,6 +108,211 @@
   var FERRY_THROUGHPUT = 3;
   var BRIDGEHEAD_DEFEND_FRACTION = 0.75;
 
+  // src/core/owners.js
+  function createOwners(rt) {
+    function teamOf(owner) {
+      return rt.game?.teams?.[owner] || "A";
+    }
+    function areAllies(a, b) {
+      if (!a || !b) {
+        return false;
+      }
+      if (a === b) {
+        return true;
+      }
+      if (a === "neutral" || b === "neutral") {
+        return false;
+      }
+      return teamOf(a) === teamOf(b);
+    }
+    function areEnemies(a, b) {
+      return !!a && !!b && a !== "neutral" && b !== "neutral" && !areAllies(a, b);
+    }
+    function ownerColor(owner) {
+      if (rt.game?.ownerColors?.[owner]) {
+        return rt.game.ownerColors[owner];
+      }
+      if (owner === "player") {
+        return "#55a3ff";
+      }
+      if (owner === "neutral") {
+        return "#d4b15a";
+      }
+      return OWNER_COLORS[Number(owner.slice(2))] || OWNER_COLORS[0];
+    }
+    function ownerName(owner) {
+      if (owner === "player") {
+        return `蓝方·${teamOf(owner)}组`;
+      }
+      if (owner === "neutral") {
+        return "中立势力";
+      }
+      return `${OWNER_NAMES[Number(owner.slice(2))] || "敌军"}·${teamOf(owner)}组`;
+    }
+    function ownerShort(owner) {
+      if (owner === "player") {
+        return "你方";
+      }
+      if (owner === "neutral") {
+        return "中立";
+      }
+      return `AI ${Number(owner.slice(2)) + 1}`;
+    }
+    function ownerOrder() {
+      return rt.game ? rt.game.ownerOrder : [];
+    }
+    function ownerExists(owner) {
+      return rt.game.units.some((entry) => entry.owner === owner) || rt.game.sites.some((entry) => entry.owner === owner);
+    }
+    function tierName(tier) {
+      return ["", "初级", "中级", "高级"][tier] || "特殊";
+    }
+    function domainName(domain) {
+      return domain === "sea" ? "海军" : "陆军";
+    }
+    function computeDimensions(sizeKey, aspectKey) {
+      const base = SIZES[sizeKey];
+      const ratio = ASPECTS[aspectKey].ratio;
+      const area = base.cells;
+      let width = Math.max(16, Math.round(Math.sqrt(area * ratio)));
+      let height = Math.max(12, Math.round(area / width));
+      if (aspectKey === "tall" && height < width) {
+        [width, height] = [height, width];
+      }
+      if (aspectKey === "wide" && width < height) {
+        [width, height] = [height, width];
+      }
+      return { w: width, h: height };
+    }
+    return {
+      teamOf,
+      areAllies,
+      areEnemies,
+      ownerColor,
+      ownerName,
+      ownerShort,
+      ownerOrder,
+      ownerExists,
+      tierName,
+      domainName,
+      computeDimensions
+    };
+  }
+
+  // src/core/grid.js
+  function makeGrid(W, H, fill) {
+    return Array.from({ length: H }, () => Array(W).fill(fill));
+  }
+  function inBounds(W, H, x, y) {
+    return x >= 0 && y >= 0 && x < W && y < H;
+  }
+  function adjacent4(W, H, x, y) {
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(W, H, cell.x, cell.y));
+  }
+  function adjacent8(W, H, x, y) {
+    return [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(W, H, cell.x, cell.y));
+  }
+
+  // src/core/queries.js
+  function createQueries(rt) {
+    function inBounds2(x, y) {
+      return inBounds(rt.W, rt.H, x, y);
+    }
+    function adjacent42(x, y) {
+      return adjacent4(rt.W, rt.H, x, y);
+    }
+    function adjacent82(x, y) {
+      return adjacent8(rt.W, rt.H, x, y);
+    }
+    function getUnit(x, y) {
+      return rt.game.units.find((entry) => entry.x === x && entry.y === y);
+    }
+    function unitsAt(x, y) {
+      return rt.game.units.filter((entry) => entry.x === x && entry.y === y);
+    }
+    function getSite(x, y) {
+      return rt.game.sites.find((entry) => entry.x === x && entry.y === y);
+    }
+    function isLandTile(x, y) {
+      return inBounds2(x, y) && rt.game.terrain[y][x] !== "water" && rt.game.terrain[y][x] !== "mountain";
+    }
+    function isWaterTile(x, y) {
+      return inBounds2(x, y) && rt.game.terrain[y][x] === "water";
+    }
+    function isCoastalWater(x, y) {
+      return isWaterTile(x, y) && adjacent82(x, y).some((cell) => isLandTile(cell.x, cell.y));
+    }
+    function isDeepWater(x, y) {
+      if (!isWaterTile(x, y)) {
+        return false;
+      }
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (isLandTile(x + dx, y + dy)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+    function sameCell(a, b) {
+      return !!a && !!b && a.x === b.x && a.y === b.y;
+    }
+    function selectedUnit() {
+      const game = rt.game;
+      if (!game?.selected) {
+        return null;
+      }
+      return game.selected.kind === "unit" ? game.selected.ref : game.selected.unit || null;
+    }
+    function selectedSite() {
+      const game = rt.game;
+      return game?.selected?.kind === "site" ? game.selected.ref : game?.selected?.site || null;
+    }
+    return {
+      inBounds: inBounds2,
+      adjacent4: adjacent42,
+      adjacent8: adjacent82,
+      getUnit,
+      unitsAt,
+      getSite,
+      isLandTile,
+      isWaterTile,
+      isCoastalWater,
+      isDeepWater,
+      sameCell,
+      selectedUnit,
+      selectedSite
+    };
+  }
+
+  // src/core/timing.js
+  function createTiming(rt) {
+    function pause(ms) {
+      if (rt.fastSim) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    function macroYield() {
+      if (typeof setImmediate === "function") {
+        return new Promise((resolve) => setImmediate(resolve));
+      }
+      return new Promise((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => resolve();
+        channel.port2.postMessage(0);
+      });
+    }
+    function aiStepDelay() {
+      if (rt.game?.settings?.spectator) {
+        return 0;
+      }
+      return Math.max(120, Math.round((rt.game?.settings?.aiSpeed || 3) * 1e3 / 10));
+    }
+    return { pause, macroYield, aiStepDelay };
+  }
+
   // src/core/utils.js
   var cellKey = (x, y) => `${x},${y}`;
   var rnd = (n) => Math.floor(Math.random() * n);
@@ -144,184 +349,6 @@
   }
   function colorOptions() {
     return Object.entries(COLOR_PRESETS);
-  }
-
-  // src/core/grid.js
-  function makeGrid(W, H, fill) {
-    return Array.from({ length: H }, () => Array(W).fill(fill));
-  }
-  function inBounds(W, H, x, y) {
-    return x >= 0 && y >= 0 && x < W && y < H;
-  }
-  function adjacent4(W, H, x, y) {
-    return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(W, H, cell.x, cell.y));
-  }
-  function adjacent8(W, H, x, y) {
-    return [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([dx, dy]) => ({ x: x + dx, y: y + dy })).filter((cell) => inBounds(W, H, cell.x, cell.y));
-  }
-
-  // src/world/mapgen.js
-  function createEllipse(W, H, terrain, cx, cy, rx, ry, fillTerrain, chance = 1) {
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const nx = (x - cx) / rx;
-        const ny = (y - cy) / ry;
-        if (nx * nx + ny * ny <= 1 && Math.random() <= chance) {
-          terrain[y][x] = fillTerrain;
-        }
-      }
-    }
-  }
-  function paintRiver(W, H, terrain, center, phase = 0) {
-    for (let y = 0; y < H; y++) {
-      const riverX = Math.round(center + Math.sin(y * 0.65 + phase) * 1.6 + Math.sin(y * 0.19) * 0.8);
-      terrain[y][clamp(riverX, 1, W - 2)] = "water";
-      if (y % 5 === 2) {
-        terrain[y][clamp(riverX, 1, W - 2)] = "road";
-      }
-    }
-  }
-  function paintRidge(W, H, terrain, center) {
-    for (let x = 0; x < W; x++) {
-      const ridgeY = Math.round(center + Math.sin(x * 0.52) * 1.7 + Math.sin(x * 0.18) * 1.1);
-      for (let dy = -1; dy <= 1; dy++) {
-        const y = clamp(ridgeY + dy, 1, H - 2);
-        terrain[y][x] = "mountain";
-      }
-      if (x % 7 === 3) {
-        terrain[clamp(ridgeY, 1, H - 2)][x] = "road";
-      }
-    }
-  }
-  function addRoadCross(W, H, terrain) {
-    const midY = Math.floor(H / 2);
-    const midX = Math.floor(W / 2);
-    for (let x = 1; x < W - 1; x++) {
-      if (terrain[midY][x] !== "water" && terrain[midY][x] !== "mountain") {
-        terrain[midY][x] = "road";
-      }
-    }
-    for (let y = 1; y < H - 1; y++) {
-      if (terrain[y][midX] !== "water" && terrain[y][midX] !== "mountain") {
-        terrain[y][midX] = "road";
-      }
-    }
-  }
-  function scatter(W, H, terrain, type, count, radius, allowed) {
-    for (let i = 0; i < count; i++) {
-      const cx = rnd(W);
-      const cy = rnd(H);
-      const r = 1 + rnd(radius);
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const x = cx + dx;
-          const y = cy + dy;
-          if (!inBounds(W, H, x, y) || !allowed.includes(terrain[y][x])) {
-            continue;
-          }
-          if (Math.hypot(dx, dy) <= r + 0.4 && Math.random() > 0.18) {
-            terrain[y][x] = type;
-          }
-        }
-      }
-    }
-  }
-  function terrainFor(mapId, complexityId, W, H) {
-    const terrain = makeGrid(W, H, "plain");
-    const complexity = COMPLEX[complexityId];
-    switch (mapId) {
-      case "frontier":
-        paintRiver(W, H, terrain, W * 0.48, 0);
-        paintRidge(W, H, terrain, H * 0.26);
-        break;
-      case "twinrivers":
-        paintRiver(W, H, terrain, W * 0.34, 0.25);
-        paintRiver(W, H, terrain, W * 0.67, 1.15);
-        break;
-      case "highlands":
-        paintRidge(W, H, terrain, H * 0.38);
-        paintRidge(W, H, terrain, H * 0.68);
-        break;
-      case "plains":
-        addRoadCross(W, H, terrain);
-        break;
-      case "heartland":
-        addRoadCross(W, H, terrain);
-        createEllipse(W, H, terrain, W * 0.2, H * 0.25, 4, 2, "forest", 0.94);
-        createEllipse(W, H, terrain, W * 0.78, H * 0.72, 4, 3, "forest", 0.94);
-        break;
-      case "coast":
-        for (let y = 0; y < H; y++) {
-          const shore = Math.floor(W * 0.22 + Math.sin(y * 0.42) * 2);
-          for (let x = 0; x <= shore; x++) {
-            terrain[y][x] = "water";
-          }
-        }
-        paintRidge(W, H, terrain, H * 0.7);
-        break;
-      case "islands":
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < W; x++) {
-            terrain[y][x] = "water";
-          }
-        }
-        createEllipse(W, H, terrain, W * 0.22, H * 0.48, 5, 3, "plain", 0.96);
-        createEllipse(W, H, terrain, W * 0.5, H * 0.3, 4, 2, "plain", 0.95);
-        createEllipse(W, H, terrain, W * 0.72, H * 0.66, 6, 3, "plain", 0.95);
-        createEllipse(W, H, terrain, W * 0.45, H * 0.78, 3, 2, "plain", 0.92);
-        break;
-      case "innersea":
-        createEllipse(W, H, terrain, W * 0.5, H * 0.52, W * 0.22, H * 0.3, "water", 0.98);
-        addRoadCross(W, H, terrain);
-        break;
-      case "grandbay":
-        createEllipse(W, H, terrain, W * 0.14, H * 0.78, W * 0.36, H * 0.42, "water", 0.98);
-        createEllipse(W, H, terrain, W * 0.42, H * 0.58, 3, 2, "water", 0.9);
-        break;
-      case "strait":
-        for (let y = 0; y < H; y++) {
-          const seaX = Math.floor(W * 0.5 + Math.sin(y * 0.42) * 1.1);
-          for (let dx = -2; dx <= 2; dx++) {
-            if (inBounds(W, H, seaX + dx, y)) {
-              terrain[y][seaX + dx] = "water";
-            }
-          }
-        }
-        createEllipse(W, H, terrain, W * 0.48, H * 0.24, 2, 1, "plain", 1);
-        createEllipse(W, H, terrain, W * 0.5, H * 0.73, 2, 1, "plain", 1);
-        break;
-      case "archipelago":
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < W; x++) {
-            terrain[y][x] = "water";
-          }
-        }
-        createEllipse(W, H, terrain, W * 0.28, H * 0.34, 5, 3, "plain", 0.96);
-        createEllipse(W, H, terrain, W * 0.62, H * 0.25, 4, 2, "plain", 0.94);
-        createEllipse(W, H, terrain, W * 0.77, H * 0.62, 6, 3, "plain", 0.95);
-        createEllipse(W, H, terrain, W * 0.44, H * 0.72, 5, 2, "plain", 0.93);
-        createEllipse(W, H, terrain, W * 0.12, H * 0.74, 3, 2, "plain", 0.92);
-        break;
-      case "random":
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < W; x++) {
-            const roll = Math.random();
-            terrain[y][x] = roll < complexity.water ? "water" : roll < complexity.water + complexity.mountain ? "mountain" : roll < complexity.water + complexity.mountain + complexity.forest ? "forest" : "plain";
-          }
-        }
-        addRoadCross(W, H, terrain);
-        break;
-      default:
-        break;
-    }
-    if (mapId !== "random") {
-      scatter(W, H, terrain, "forest", Math.max(2, Math.round(W * H * complexity.forest / 24)), 2, ["plain"]);
-      scatter(W, H, terrain, "mountain", Math.max(1, Math.round(W * H * complexity.mountain / 34)), 1, ["plain"]);
-      if (!MAPS[mapId].sea) {
-        scatter(W, H, terrain, "water", Math.max(0, Math.round(W * H * complexity.water / 70)), 1, ["plain"]);
-      }
-    }
-    return terrain;
   }
 
   // src/game/movement.js
@@ -460,170 +487,53 @@
     return { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack };
   }
 
-  // src/io/storage.js
-  function createLocalStorageBackend() {
-    const ok = typeof localStorage !== "undefined";
-    return {
-      kind: "localStorage",
-      // Survives page reloads, but NOT a browser cache/site-data clear.
-      durable: false,
-      available: ok,
-      getItem(key) {
-        return ok ? localStorage.getItem(key) : null;
-      },
-      setItem(key, value) {
-        if (ok) localStorage.setItem(key, value);
-      },
-      removeItem(key) {
-        if (ok) localStorage.removeItem(key);
-      },
-      keys() {
-        if (!ok) return [];
-        const out = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k) out.push(k);
-        }
-        return out;
-      }
-    };
-  }
-  var saveStore = createLocalStorageBackend();
-
-  // src/io/saves.js
-  var SAVE_PREFIX = "frontier_save_";
-  function downloadSaveFile(payload) {
-    if (!payload) {
-      return;
-    }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const safeName = String(payload.name || "save").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60);
-    link.href = url;
-    link.download = `${safeName}.frontiersave.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 1e3);
-  }
-  function createSaves(rt) {
-    function listSaves() {
-      const saves = [];
-      for (const key of saveStore.keys()) {
-        if (!key || !key.startsWith(SAVE_PREFIX)) {
-          continue;
-        }
-        try {
-          const data = JSON.parse(saveStore.getItem(key));
-          saves.push({ key, name: data.name || "未命名", savedAt: data.savedAt || 0, map: data.map || "", turn: data.turn || 1 });
-        } catch (err) {
-        }
-      }
-      return saves.sort((a, b) => b.savedAt - a.savedAt);
-    }
-    function buildSavePayload(name) {
-      const { selected, pendingOrder, ...rest } = rt.game;
-      return {
-        name: name || `存档 ${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN")}`,
-        savedAt: Date.now(),
-        map: MAPS[rt.game.settings.map]?.name || rt.game.settings.map,
-        turn: rt.game.turn,
-        W: rt.W,
-        H: rt.H,
-        S: rt.S,
-        state: rest
-      };
-    }
-    function saveAsNewSave(name) {
-      if (!rt.game) {
-        return false;
-      }
-      const key = SAVE_PREFIX + Date.now();
-      try {
-        saveStore.setItem(key, JSON.stringify(buildSavePayload(name)));
-        rt.currentSaveKey = key;
-        return true;
-      } catch (err) {
-        return false;
+  // src/game/stats.js
+  function createStats(rt) {
+    function ensureStatsStarted() {
+      const game = rt.game;
+      if (game && !game.stats.startTime) {
+        game.stats.startTime = Date.now();
+        recordStatSnapshot("start");
       }
     }
-    function overwriteCurrentSave(name) {
-      if (!rt.game || !rt.currentSaveKey) {
-        return false;
+    function statTimeSeconds() {
+      const game = rt.game;
+      if (!game?.stats?.startTime) {
+        return 0;
       }
-      try {
-        saveStore.setItem(rt.currentSaveKey, JSON.stringify(buildSavePayload(name)));
-        return true;
-      } catch (err) {
-        return false;
-      }
+      const end = game.stats.endTime || Date.now();
+      return Math.max(0, Math.round((end - game.stats.startTime) / 1e3));
     }
-    function importSaveToList(payload) {
-      if (!payload?.state) {
-        return false;
+    function recordStatSnapshot(label = "") {
+      const game = rt.game;
+      if (!game?.stats) {
+        return;
       }
-      try {
-        saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
-          name: payload.name || "导入的存档",
-          savedAt: payload.savedAt || Date.now(),
-          map: payload.map || "",
-          turn: payload.turn || 1,
-          W: payload.W,
-          H: payload.H,
-          S: payload.S,
-          state: payload.state
-        }));
-        return true;
-      } catch (err) {
-        return false;
-      }
+      game.stats.history.push({
+        label,
+        time: statTimeSeconds(),
+        produced: { ...game.stats.produced },
+        kills: { ...game.stats.kills },
+        losses: { ...game.stats.losses },
+        captures: { ...game.stats.captures },
+        lostSites: { ...game.stats.lostSites }
+      });
     }
-    function currentSaveName() {
-      if (!rt.currentSaveKey) {
-        return "";
+    function incrementStat(bucket, owner, value = 1) {
+      const game = rt.game;
+      if (!game?.stats?.[bucket]?.[owner] && game?.stats?.[bucket]?.[owner] !== 0) {
+        return;
       }
-      try {
-        return JSON.parse(saveStore.getItem(rt.currentSaveKey))?.name || "";
-      } catch (err) {
-        return "";
-      }
+      game.stats[bucket][owner] += value;
     }
-    function loadSave(key) {
-      let payload;
-      try {
-        payload = JSON.parse(saveStore.getItem(key));
-      } catch (err) {
-        return false;
+    function incrementStrat(owner, key, value = 1) {
+      const bucket = rt.game?.stats?.strat?.[owner];
+      if (!bucket || typeof bucket[key] !== "number") {
+        return;
       }
-      if (rt.loadPayload(payload)) {
-        rt.currentSaveKey = key;
-        return true;
-      }
-      return false;
+      bucket[key] += value;
     }
-    function deleteSave(key) {
-      saveStore.removeItem(key);
-    }
-    function readSave(key) {
-      try {
-        return JSON.parse(saveStore.getItem(key));
-      } catch (err) {
-        return null;
-      }
-    }
-    return {
-      SAVE_PREFIX,
-      listSaves,
-      buildSavePayload,
-      saveAsNewSave,
-      overwriteCurrentSave,
-      importSaveToList,
-      currentSaveName,
-      loadSave,
-      deleteSave,
-      readSave
-    };
+    return { ensureStatsStarted, statTimeSeconds, recordStatSnapshot, incrementStat, incrementStrat };
   }
 
   // src/game/entities.js
@@ -1129,6 +1039,288 @@
     return { healOwner, grantIncome, decayTemporarySites, teamStandings, resolveStalemate, checkEnd, finish, endGameNeutral, sideLabel };
   }
 
+  // src/game/turnflow.js
+  var CAPTURE_DOWNGRADE_CHANCE = 0.12;
+  function createTurnFlow(rt, deps) {
+    const {
+      decayFrontMemory,
+      decayTemporarySites,
+      healOwner,
+      grantIncome,
+      aiRepair,
+      resolveStalemate,
+      aiTurn
+    } = deps;
+    function captureSite(unitEntry) {
+      const game = rt.game;
+      const siteEntry = rt.getSite(unitEntry.x, unitEntry.y);
+      if (!siteEntry || siteEntry.owner === unitEntry.owner || rt.areAllies(siteEntry.owner, unitEntry.owner)) {
+        return;
+      }
+      if (siteEntry.kind === "camp") {
+        game.sites = game.sites.filter((entry) => entry !== siteEntry);
+        if (game.selected?.ref === siteEntry) {
+          game.selected = null;
+        }
+        rt.incrementStat("lostSites", siteEntry.owner, 1);
+        rt.incrementStat("captures", unitEntry.owner, 1);
+        rt.recordStatSnapshot("camp-destroyed");
+        rt.log(`${rt.ownerName(unitEntry.owner)}摧毁了${siteEntry.owner === "player" ? "你的" : rt.ownerName(siteEntry.owner)}临时营地。`, "system");
+        return;
+      }
+      const domain = typeMeta(unitEntry.type).domain;
+      if (siteEntry.kind === "city" && domain !== "land") {
+        return;
+      }
+      if ((siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && domain !== "sea") {
+        return;
+      }
+      const oldTier = siteEntry.tier;
+      const oldOwner = siteEntry.owner;
+      siteEntry.owner = unitEntry.owner;
+      if (siteEntry.kind !== "fortress" && Math.random() < CAPTURE_DOWNGRADE_CHANCE) {
+        siteEntry.tier = Math.max(1, siteEntry.tier - 1);
+        siteEntry.income = Math.max(4, siteMeta(siteEntry.kind).income + (siteEntry.tier - 1) * (siteEntry.kind === "city" ? 3 : 2));
+      }
+      if (oldOwner !== "neutral") {
+        rt.incrementStat("lostSites", oldOwner, 1);
+      }
+      rt.incrementStat("captures", unitEntry.owner, 1);
+      if (siteEntry.kind === "city") {
+        rt.incrementStrat(unitEntry.owner, "cityCaptures");
+      } else if (siteEntry.kind.startsWith("oil")) {
+        rt.incrementStrat(unitEntry.owner, "oilCaptures");
+      } else if (siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") {
+        rt.incrementStrat(unitEntry.owner, "shipyardCaptures");
+      }
+      rt.recordStatSnapshot("capture");
+      rt.log(`${rt.ownerName(unitEntry.owner)}夺取了${siteEntry.name}${siteEntry.tier < oldTier ? "，设施战损降级。" : "。"}`, "system");
+      rt.checkEnd();
+    }
+    function beginTurn(owner, initial) {
+      const game = rt.game;
+      if (game.over) {
+        return;
+      }
+      if (!rt.ownerExists(owner)) {
+        rt.advanceTurn();
+        return;
+      }
+      game.side = owner;
+      game.buildsThisTurn = game.buildsThisTurn || {};
+      game.buildsThisTurn[owner] = 0;
+      if (!initial) {
+        decayFrontMemory(owner);
+        decayTemporarySites(owner);
+        healOwner(owner);
+        grantIncome(owner);
+        aiRepair(owner);
+      }
+      for (const unitEntry of game.units.filter((entry) => entry.owner === owner)) {
+        unitEntry.maxMove = effectiveMove(unitEntry);
+        unitEntry.move = unitEntry.maxMove;
+        unitEntry.acted = false;
+        unitEntry.hasAttacked = false;
+      }
+      if (owner !== "player") {
+        game.selected = null;
+      }
+      rt.refresh();
+      if (!initial) {
+        rt.checkEnd();
+      }
+      if (owner !== "player" && !rt.fastSim) {
+        setTimeout(() => {
+          if (!game.over && game.side === owner) {
+            void aiTurn(owner);
+          }
+        }, 260);
+      }
+    }
+    function advanceTurn() {
+      const game = rt.game;
+      if (game.over) {
+        return;
+      }
+      game.currentIndex = (game.currentIndex + 1) % game.ownerOrder.length;
+      if (game.currentIndex === 0) {
+        game.turn += 1;
+        if (game.turn > MAX_TURNS && !game.freeplay && !game.over) {
+          resolveStalemate();
+          if (game.over) {
+            return;
+          }
+        }
+      }
+      beginTurn(game.ownerOrder[game.currentIndex], false);
+    }
+    return { captureSite, beginTurn, advanceTurn };
+  }
+
+  // src/world/mapgen.js
+  function createEllipse(W, H, terrain, cx, cy, rx, ry, fillTerrain, chance = 1) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const nx = (x - cx) / rx;
+        const ny = (y - cy) / ry;
+        if (nx * nx + ny * ny <= 1 && Math.random() <= chance) {
+          terrain[y][x] = fillTerrain;
+        }
+      }
+    }
+  }
+  function paintRiver(W, H, terrain, center, phase = 0) {
+    for (let y = 0; y < H; y++) {
+      const riverX = Math.round(center + Math.sin(y * 0.65 + phase) * 1.6 + Math.sin(y * 0.19) * 0.8);
+      terrain[y][clamp(riverX, 1, W - 2)] = "water";
+      if (y % 5 === 2) {
+        terrain[y][clamp(riverX, 1, W - 2)] = "road";
+      }
+    }
+  }
+  function paintRidge(W, H, terrain, center) {
+    for (let x = 0; x < W; x++) {
+      const ridgeY = Math.round(center + Math.sin(x * 0.52) * 1.7 + Math.sin(x * 0.18) * 1.1);
+      for (let dy = -1; dy <= 1; dy++) {
+        const y = clamp(ridgeY + dy, 1, H - 2);
+        terrain[y][x] = "mountain";
+      }
+      if (x % 7 === 3) {
+        terrain[clamp(ridgeY, 1, H - 2)][x] = "road";
+      }
+    }
+  }
+  function addRoadCross(W, H, terrain) {
+    const midY = Math.floor(H / 2);
+    const midX = Math.floor(W / 2);
+    for (let x = 1; x < W - 1; x++) {
+      if (terrain[midY][x] !== "water" && terrain[midY][x] !== "mountain") {
+        terrain[midY][x] = "road";
+      }
+    }
+    for (let y = 1; y < H - 1; y++) {
+      if (terrain[y][midX] !== "water" && terrain[y][midX] !== "mountain") {
+        terrain[y][midX] = "road";
+      }
+    }
+  }
+  function scatter(W, H, terrain, type, count, radius, allowed) {
+    for (let i = 0; i < count; i++) {
+      const cx = rnd(W);
+      const cy = rnd(H);
+      const r = 1 + rnd(radius);
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          if (!inBounds(W, H, x, y) || !allowed.includes(terrain[y][x])) {
+            continue;
+          }
+          if (Math.hypot(dx, dy) <= r + 0.4 && Math.random() > 0.18) {
+            terrain[y][x] = type;
+          }
+        }
+      }
+    }
+  }
+  function terrainFor(mapId, complexityId, W, H) {
+    const terrain = makeGrid(W, H, "plain");
+    const complexity = COMPLEX[complexityId];
+    switch (mapId) {
+      case "frontier":
+        paintRiver(W, H, terrain, W * 0.48, 0);
+        paintRidge(W, H, terrain, H * 0.26);
+        break;
+      case "twinrivers":
+        paintRiver(W, H, terrain, W * 0.34, 0.25);
+        paintRiver(W, H, terrain, W * 0.67, 1.15);
+        break;
+      case "highlands":
+        paintRidge(W, H, terrain, H * 0.38);
+        paintRidge(W, H, terrain, H * 0.68);
+        break;
+      case "plains":
+        addRoadCross(W, H, terrain);
+        break;
+      case "heartland":
+        addRoadCross(W, H, terrain);
+        createEllipse(W, H, terrain, W * 0.2, H * 0.25, 4, 2, "forest", 0.94);
+        createEllipse(W, H, terrain, W * 0.78, H * 0.72, 4, 3, "forest", 0.94);
+        break;
+      case "coast":
+        for (let y = 0; y < H; y++) {
+          const shore = Math.floor(W * 0.22 + Math.sin(y * 0.42) * 2);
+          for (let x = 0; x <= shore; x++) {
+            terrain[y][x] = "water";
+          }
+        }
+        paintRidge(W, H, terrain, H * 0.7);
+        break;
+      case "islands":
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            terrain[y][x] = "water";
+          }
+        }
+        createEllipse(W, H, terrain, W * 0.22, H * 0.48, 5, 3, "plain", 0.96);
+        createEllipse(W, H, terrain, W * 0.5, H * 0.3, 4, 2, "plain", 0.95);
+        createEllipse(W, H, terrain, W * 0.72, H * 0.66, 6, 3, "plain", 0.95);
+        createEllipse(W, H, terrain, W * 0.45, H * 0.78, 3, 2, "plain", 0.92);
+        break;
+      case "innersea":
+        createEllipse(W, H, terrain, W * 0.5, H * 0.52, W * 0.22, H * 0.3, "water", 0.98);
+        addRoadCross(W, H, terrain);
+        break;
+      case "grandbay":
+        createEllipse(W, H, terrain, W * 0.14, H * 0.78, W * 0.36, H * 0.42, "water", 0.98);
+        createEllipse(W, H, terrain, W * 0.42, H * 0.58, 3, 2, "water", 0.9);
+        break;
+      case "strait":
+        for (let y = 0; y < H; y++) {
+          const seaX = Math.floor(W * 0.5 + Math.sin(y * 0.42) * 1.1);
+          for (let dx = -2; dx <= 2; dx++) {
+            if (inBounds(W, H, seaX + dx, y)) {
+              terrain[y][seaX + dx] = "water";
+            }
+          }
+        }
+        createEllipse(W, H, terrain, W * 0.48, H * 0.24, 2, 1, "plain", 1);
+        createEllipse(W, H, terrain, W * 0.5, H * 0.73, 2, 1, "plain", 1);
+        break;
+      case "archipelago":
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            terrain[y][x] = "water";
+          }
+        }
+        createEllipse(W, H, terrain, W * 0.28, H * 0.34, 5, 3, "plain", 0.96);
+        createEllipse(W, H, terrain, W * 0.62, H * 0.25, 4, 2, "plain", 0.94);
+        createEllipse(W, H, terrain, W * 0.77, H * 0.62, 6, 3, "plain", 0.95);
+        createEllipse(W, H, terrain, W * 0.44, H * 0.72, 5, 2, "plain", 0.93);
+        createEllipse(W, H, terrain, W * 0.12, H * 0.74, 3, 2, "plain", 0.92);
+        break;
+      case "random":
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            const roll = Math.random();
+            terrain[y][x] = roll < complexity.water ? "water" : roll < complexity.water + complexity.mountain ? "mountain" : roll < complexity.water + complexity.mountain + complexity.forest ? "forest" : "plain";
+          }
+        }
+        addRoadCross(W, H, terrain);
+        break;
+      default:
+        break;
+    }
+    if (mapId !== "random") {
+      scatter(W, H, terrain, "forest", Math.max(2, Math.round(W * H * complexity.forest / 24)), 2, ["plain"]);
+      scatter(W, H, terrain, "mountain", Math.max(1, Math.round(W * H * complexity.mountain / 34)), 1, ["plain"]);
+      if (!MAPS[mapId].sea) {
+        scatter(W, H, terrain, "water", Math.max(0, Math.round(W * H * complexity.water / 70)), 1, ["plain"]);
+      }
+    }
+    return terrain;
+  }
+
   // src/game/newgame.js
   var START_GOLD = 45;
   var EMPTY_STRAT = {
@@ -1266,6 +1458,233 @@
       }
     }
     return { newGame, readLobbyConfig, readSettings, emptyStats };
+  }
+
+  // src/game/transport.js
+  function createTransport(rt) {
+    function moveUnit(unitEntry, x, y) {
+      const cost = rt.reachable(unitEntry).get(cellKey(x, y));
+      if (cost === void 0 || unitEntry.hasAttacked) {
+        return false;
+      }
+      unitEntry.x = x;
+      unitEntry.y = y;
+      unitEntry.move -= cost;
+      unitEntry.acted = true;
+      rt.captureSite(unitEntry);
+      return true;
+    }
+    function canLoadTransport(transport, passenger) {
+      return !!transport && !!passenger && !!typeMeta(transport.type).transport && typeMeta(passenger.type).domain === "land" && transport.owner === passenger.owner && diagonalDist(transport, passenger) === 1 && transport.cargo.length < typeMeta(transport.type).transport;
+    }
+    function loadTransport(transport, passenger) {
+      if (!canLoadTransport(transport, passenger)) {
+        return false;
+      }
+      transport.cargo.push({ type: passenger.type, owner: passenger.owner, hp: passenger.hp, maxHp: passenger.maxHp, lastAttacked: passenger.lastAttacked });
+      rt.game.units = rt.game.units.filter((entry) => entry !== passenger);
+      transport.acted = true;
+      rt.log(`${typeMeta(passenger.type).name}登上了运兵船。`, "system");
+      return true;
+    }
+    function canUnloadTransport(transport, x, y) {
+      if (!transport || !transport.cargo?.length || diagonalDist(transport, { x, y }) !== 1 || !rt.isLandTile(x, y)) {
+        return false;
+      }
+      const occupants = rt.unitsAt(x, y);
+      return occupants.length < MAX_STACK && occupants.every((entry) => entry.owner === transport.owner && typeMeta(entry.type).domain === "land");
+    }
+    function unloadTransport(transport, x, y) {
+      if (!canUnloadTransport(transport, x, y)) {
+        return false;
+      }
+      const payload = transport.cargo.shift();
+      const unitEntry = unit(payload.type, payload.owner, x, y);
+      unitEntry.hp = payload.hp;
+      unitEntry.maxHp = payload.maxHp;
+      unitEntry.move = 0;
+      unitEntry.acted = true;
+      unitEntry.hasAttacked = true;
+      unitEntry.lastAttacked = payload.lastAttacked;
+      rt.game.units.push(unitEntry);
+      transport.acted = true;
+      if (unitEntry.type === "engineer") {
+        rt.incrementStrat(unitEntry.owner, "engineerLandings");
+      }
+      rt.log(`${typeMeta(unitEntry.type).name}完成登陆。`, "system");
+      rt.captureSite(unitEntry);
+      return true;
+    }
+    function supportSites(unitEntry) {
+      return rt.game.sites.filter((siteEntry) => rt.areAllies(siteEntry.owner, unitEntry.owner) && ((siteEntry.kind === "city" || siteEntry.kind === "camp" || siteEntry.kind === "barracksSmall" || siteEntry.kind === "barracksLarge") && typeMeta(unitEntry.type).domain === "land" || (siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && typeMeta(unitEntry.type).domain === "sea"));
+    }
+    return { moveUnit, canLoadTransport, loadTransport, canUnloadTransport, unloadTransport, supportSites };
+  }
+
+  // src/io/storage.js
+  function createLocalStorageBackend() {
+    const ok = typeof localStorage !== "undefined";
+    return {
+      kind: "localStorage",
+      // Survives page reloads, but NOT a browser cache/site-data clear.
+      durable: false,
+      available: ok,
+      getItem(key) {
+        return ok ? localStorage.getItem(key) : null;
+      },
+      setItem(key, value) {
+        if (ok) localStorage.setItem(key, value);
+      },
+      removeItem(key) {
+        if (ok) localStorage.removeItem(key);
+      },
+      keys() {
+        if (!ok) return [];
+        const out = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) out.push(k);
+        }
+        return out;
+      }
+    };
+  }
+  var saveStore = createLocalStorageBackend();
+
+  // src/io/saves.js
+  var SAVE_PREFIX = "frontier_save_";
+  function downloadSaveFile(payload) {
+    if (!payload) {
+      return;
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = String(payload.name || "save").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60);
+    link.href = url;
+    link.download = `${safeName}.frontiersave.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
+  }
+  function createSaves(rt) {
+    function listSaves() {
+      const saves = [];
+      for (const key of saveStore.keys()) {
+        if (!key || !key.startsWith(SAVE_PREFIX)) {
+          continue;
+        }
+        try {
+          const data = JSON.parse(saveStore.getItem(key));
+          saves.push({ key, name: data.name || "未命名", savedAt: data.savedAt || 0, map: data.map || "", turn: data.turn || 1 });
+        } catch (err) {
+        }
+      }
+      return saves.sort((a, b) => b.savedAt - a.savedAt);
+    }
+    function buildSavePayload(name) {
+      const { selected, pendingOrder, ...rest } = rt.game;
+      return {
+        name: name || `存档 ${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN")}`,
+        savedAt: Date.now(),
+        map: MAPS[rt.game.settings.map]?.name || rt.game.settings.map,
+        turn: rt.game.turn,
+        W: rt.W,
+        H: rt.H,
+        S: rt.S,
+        state: rest
+      };
+    }
+    function saveAsNewSave(name) {
+      if (!rt.game) {
+        return false;
+      }
+      const key = SAVE_PREFIX + Date.now();
+      try {
+        saveStore.setItem(key, JSON.stringify(buildSavePayload(name)));
+        rt.currentSaveKey = key;
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+    function overwriteCurrentSave(name) {
+      if (!rt.game || !rt.currentSaveKey) {
+        return false;
+      }
+      try {
+        saveStore.setItem(rt.currentSaveKey, JSON.stringify(buildSavePayload(name)));
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+    function importSaveToList(payload) {
+      if (!payload?.state) {
+        return false;
+      }
+      try {
+        saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
+          name: payload.name || "导入的存档",
+          savedAt: payload.savedAt || Date.now(),
+          map: payload.map || "",
+          turn: payload.turn || 1,
+          W: payload.W,
+          H: payload.H,
+          S: payload.S,
+          state: payload.state
+        }));
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+    function currentSaveName() {
+      if (!rt.currentSaveKey) {
+        return "";
+      }
+      try {
+        return JSON.parse(saveStore.getItem(rt.currentSaveKey))?.name || "";
+      } catch (err) {
+        return "";
+      }
+    }
+    function loadSave(key) {
+      let payload;
+      try {
+        payload = JSON.parse(saveStore.getItem(key));
+      } catch (err) {
+        return false;
+      }
+      if (rt.loadPayload(payload)) {
+        rt.currentSaveKey = key;
+        return true;
+      }
+      return false;
+    }
+    function deleteSave(key) {
+      saveStore.removeItem(key);
+    }
+    function readSave(key) {
+      try {
+        return JSON.parse(saveStore.getItem(key));
+      } catch (err) {
+        return null;
+      }
+    }
+    return {
+      SAVE_PREFIX,
+      listSaves,
+      buildSavePayload,
+      saveAsNewSave,
+      overwriteCurrentSave,
+      importSaveToList,
+      currentSaveName,
+      loadSave,
+      deleteSave,
+      readSave
+    };
   }
 
   // src/world/worldgen.js
@@ -1514,67 +1933,6 @@
       return spawned;
     }
     return { collectLandCells, makeCities, makeSpecialSites, nearestCoastalWater, makeNavalSites, spawnLand, spawnSea };
-  }
-
-  // src/game/transport.js
-  function createTransport(rt) {
-    function moveUnit(unitEntry, x, y) {
-      const cost = rt.reachable(unitEntry).get(cellKey(x, y));
-      if (cost === void 0 || unitEntry.hasAttacked) {
-        return false;
-      }
-      unitEntry.x = x;
-      unitEntry.y = y;
-      unitEntry.move -= cost;
-      unitEntry.acted = true;
-      rt.captureSite(unitEntry);
-      return true;
-    }
-    function canLoadTransport(transport, passenger) {
-      return !!transport && !!passenger && !!typeMeta(transport.type).transport && typeMeta(passenger.type).domain === "land" && transport.owner === passenger.owner && diagonalDist(transport, passenger) === 1 && transport.cargo.length < typeMeta(transport.type).transport;
-    }
-    function loadTransport(transport, passenger) {
-      if (!canLoadTransport(transport, passenger)) {
-        return false;
-      }
-      transport.cargo.push({ type: passenger.type, owner: passenger.owner, hp: passenger.hp, maxHp: passenger.maxHp, lastAttacked: passenger.lastAttacked });
-      rt.game.units = rt.game.units.filter((entry) => entry !== passenger);
-      transport.acted = true;
-      rt.log(`${typeMeta(passenger.type).name}登上了运兵船。`, "system");
-      return true;
-    }
-    function canUnloadTransport(transport, x, y) {
-      if (!transport || !transport.cargo?.length || diagonalDist(transport, { x, y }) !== 1 || !rt.isLandTile(x, y)) {
-        return false;
-      }
-      const occupants = rt.unitsAt(x, y);
-      return occupants.length < MAX_STACK && occupants.every((entry) => entry.owner === transport.owner && typeMeta(entry.type).domain === "land");
-    }
-    function unloadTransport(transport, x, y) {
-      if (!canUnloadTransport(transport, x, y)) {
-        return false;
-      }
-      const payload = transport.cargo.shift();
-      const unitEntry = unit(payload.type, payload.owner, x, y);
-      unitEntry.hp = payload.hp;
-      unitEntry.maxHp = payload.maxHp;
-      unitEntry.move = 0;
-      unitEntry.acted = true;
-      unitEntry.hasAttacked = true;
-      unitEntry.lastAttacked = payload.lastAttacked;
-      rt.game.units.push(unitEntry);
-      transport.acted = true;
-      if (unitEntry.type === "engineer") {
-        rt.incrementStrat(unitEntry.owner, "engineerLandings");
-      }
-      rt.log(`${typeMeta(unitEntry.type).name}完成登陆。`, "system");
-      rt.captureSite(unitEntry);
-      return true;
-    }
-    function supportSites(unitEntry) {
-      return rt.game.sites.filter((siteEntry) => rt.areAllies(siteEntry.owner, unitEntry.owner) && ((siteEntry.kind === "city" || siteEntry.kind === "camp" || siteEntry.kind === "barracksSmall" || siteEntry.kind === "barracksLarge") && typeMeta(unitEntry.type).domain === "land" || (siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && typeMeta(unitEntry.type).domain === "sea"));
-    }
-    return { moveUnit, canLoadTransport, loadTransport, canUnloadTransport, unloadTransport, supportSites };
   }
 
   // src/ai/scoring.js
@@ -3382,6 +3740,26 @@
     };
   }
 
+  // src/ui/notify.js
+  function createNotify(rt) {
+    const $ = (id) => document.getElementById(id);
+    const MAX_LOGS = 80;
+    let toastTimer = null;
+    function log(text, kind = "") {
+      rt.game.logs.push({ text, kind });
+      if (rt.game.logs.length > MAX_LOGS) {
+        rt.game.logs.shift();
+      }
+    }
+    function toast(text) {
+      $("toast").textContent = text;
+      $("toast").classList.remove("hidden");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => $("toast").classList.add("hidden"), 1800);
+    }
+    return { log, toast };
+  }
+
   // src/ui/lobby.js
   var AI_DEFAULT_COLORS = ["crimson", "violet", "amber", "jade", "steel", "sand", "teal"];
   function createLobby(rt) {
@@ -4297,230 +4675,9 @@
     let S = 40;
     let cam = { x: 0, y: 0 };
     let zoom = 1;
-    let selectedSaveKey = null;
     let currentSaveKey = null;
-    let toastTimer = null;
     let game = null;
     let fastSim = false;
-    function inBounds2(x, y) {
-      return inBounds(W, H, x, y);
-    }
-    function adjacent42(x, y) {
-      return adjacent4(W, H, x, y);
-    }
-    function adjacent82(x, y) {
-      return adjacent8(W, H, x, y);
-    }
-    function ownerColor(owner) {
-      if (game?.ownerColors?.[owner]) {
-        return game.ownerColors[owner];
-      }
-      if (owner === "player") {
-        return "#55a3ff";
-      }
-      if (owner === "neutral") {
-        return "#d4b15a";
-      }
-      return OWNER_COLORS[Number(owner.slice(2))] || OWNER_COLORS[0];
-    }
-    function selectedSite() {
-      return game?.selected?.kind === "site" ? game.selected.ref : game?.selected?.site || null;
-    }
-    function selectedUnit() {
-      if (!game?.selected) {
-        return null;
-      }
-      return game.selected.kind === "unit" ? game.selected.ref : game.selected.unit || null;
-    }
-    function ensureStatsStarted() {
-      if (game && !game.stats.startTime) {
-        game.stats.startTime = Date.now();
-        recordStatSnapshot("start");
-      }
-    }
-    function emptyOwnerMap(seed = 0) {
-      return Object.fromEntries(game.ownerOrder.map((owner) => [owner, seed]));
-    }
-    function statTimeSeconds() {
-      if (!game?.stats?.startTime) {
-        return 0;
-      }
-      const end = game.stats.endTime || Date.now();
-      return Math.max(0, Math.round((end - game.stats.startTime) / 1e3));
-    }
-    function recordStatSnapshot(label = "") {
-      if (!game?.stats) {
-        return;
-      }
-      game.stats.history.push({
-        label,
-        time: statTimeSeconds(),
-        produced: { ...game.stats.produced },
-        kills: { ...game.stats.kills },
-        losses: { ...game.stats.losses },
-        captures: { ...game.stats.captures },
-        lostSites: { ...game.stats.lostSites }
-      });
-    }
-    function incrementStat(bucket, owner, value = 1) {
-      if (!game?.stats?.[bucket]?.[owner] && game?.stats?.[bucket]?.[owner] !== 0) {
-        return;
-      }
-      game.stats[bucket][owner] += value;
-    }
-    function incrementStrat(owner, key, value = 1) {
-      const bucket = game?.stats?.strat?.[owner];
-      if (!bucket || typeof bucket[key] !== "number") {
-        return;
-      }
-      bucket[key] += value;
-    }
-    function showStatsPanel() {
-      if (!game?.stats) {
-        return;
-      }
-      game.stats.endTime = Date.now();
-      recordStatSnapshot("finish");
-      $("statsPanel").classList.remove("hidden");
-      renderStatsSummary(true);
-      drawStatsChart();
-    }
-    function pause(ms) {
-      if (fastSim) {
-        return Promise.resolve();
-      }
-      return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-    function macroYield() {
-      if (typeof setImmediate === "function") {
-        return new Promise((resolve) => setImmediate(resolve));
-      }
-      return new Promise((resolve) => {
-        const channel = new MessageChannel();
-        channel.port1.onmessage = () => resolve();
-        channel.port2.postMessage(0);
-      });
-    }
-    function aiStepDelay() {
-      if (game?.settings?.spectator) {
-        return 0;
-      }
-      return Math.max(120, Math.round((game?.settings?.aiSpeed || 3) * 1e3 / 10));
-    }
-    function teamOf(owner) {
-      return game?.teams?.[owner] || "A";
-    }
-    function areAllies(a, b) {
-      if (!a || !b) {
-        return false;
-      }
-      if (a === b) {
-        return true;
-      }
-      if (a === "neutral" || b === "neutral") {
-        return false;
-      }
-      return teamOf(a) === teamOf(b);
-    }
-    function areEnemies(a, b) {
-      return !!a && !!b && a !== "neutral" && b !== "neutral" && !areAllies(a, b);
-    }
-    function ownerName(owner) {
-      if (owner === "player") {
-        return `蓝方·${teamOf(owner)}组`;
-      }
-      if (owner === "neutral") {
-        return "中立势力";
-      }
-      return `${OWNER_NAMES[Number(owner.slice(2))] || "敌军"}·${teamOf(owner)}组`;
-    }
-    function ownerShort(owner) {
-      if (owner === "player") {
-        return "你方";
-      }
-      if (owner === "neutral") {
-        return "中立";
-      }
-      return `AI ${Number(owner.slice(2)) + 1}`;
-    }
-    function tierName(tier) {
-      return ["", "初级", "中级", "高级"][tier] || "特殊";
-    }
-    function domainName(domain) {
-      return domain === "sea" ? "海军" : "陆军";
-    }
-    function computeDimensions(sizeKey, aspectKey) {
-      const base = SIZES[sizeKey];
-      const ratio = ASPECTS[aspectKey].ratio;
-      const area = base.cells;
-      let width = Math.max(16, Math.round(Math.sqrt(area * ratio)));
-      let height = Math.max(12, Math.round(area / width));
-      if (aspectKey === "tall" && height < width) {
-        [width, height] = [height, width];
-      }
-      if (aspectKey === "wide" && width < height) {
-        [width, height] = [height, width];
-      }
-      return { w: width, h: height };
-    }
-    function getUnit(x, y) {
-      return game.units.find((entry) => entry.x === x && entry.y === y);
-    }
-    function unitsAt(x, y) {
-      return game.units.filter((entry) => entry.x === x && entry.y === y);
-    }
-    function getSite(x, y) {
-      return game.sites.find((entry) => entry.x === x && entry.y === y);
-    }
-    function isLandTile(x, y) {
-      return inBounds2(x, y) && game.terrain[y][x] !== "water" && game.terrain[y][x] !== "mountain";
-    }
-    function isWaterTile(x, y) {
-      return inBounds2(x, y) && game.terrain[y][x] === "water";
-    }
-    function isCoastalWater(x, y) {
-      return isWaterTile(x, y) && adjacent82(x, y).some((cell) => isLandTile(cell.x, cell.y));
-    }
-    function isDeepWater(x, y) {
-      if (!isWaterTile(x, y)) {
-        return false;
-      }
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
-          if (isLandTile(x + dx, y + dy)) {
-            return false;
-          }
-        }
-      }
-      return true;
-    }
-    function ownerOrder() {
-      return game ? game.ownerOrder : [];
-    }
-    function sameCell(a, b) {
-      return !!a && !!b && a.x === b.x && a.y === b.y;
-    }
-    function grantKills(unitEntry, kills) {
-      if (!unitEntry) {
-        return;
-      }
-      unitEntry.kills += kills;
-      const nextRank = rankFromKills(unitEntry.kills);
-      if (nextRank !== unitEntry.rank) {
-        unitEntry.rank = nextRank;
-        unitEntry.maxMove = effectiveMove(unitEntry);
-        unitEntry.move = Math.max(unitEntry.move, Math.min(unitEntry.maxMove, unitEntry.move + 1));
-        log(`${ownerName(unitEntry.owner)}的${typeMeta(unitEntry.type).name}晋升为 ${nextRank} 级老兵。`, "system");
-      }
-    }
-    function clearPendingOrder() {
-      if (game) {
-        game.pendingOrder = null;
-      }
-    }
-    function ownerExists(owner) {
-      return game.units.some((entry) => entry.owner === owner) || game.sites.some((entry) => entry.owner === owner);
-    }
     let turnApi;
     let transportApi;
     let scoringApi;
@@ -4530,7 +4687,17 @@
     let intentApi;
     let boardApi;
     let savesApi;
+    let ownersApi;
+    let queriesApi;
+    let statsApi;
+    let notifyApi;
+    let timingApi;
+    let turnFlowApi;
+    let panelsApi;
+    let statsRenderApi;
+    let screensApi;
     const rt = {
+      // ── 状态读取 ──
       get game() {
         return game;
       },
@@ -4546,10 +4713,6 @@
       get fastSim() {
         return fastSim;
       },
-      // 只有 debug/fastsim.js 会写它 —— 见那个文件对 fastSim 开关的说明。
-      setFastSim: (value) => {
-        fastSim = value;
-      },
       get canvas() {
         return canvas;
       },
@@ -4562,21 +4725,19 @@
       get zoom() {
         return zoom;
       },
-      // zoom 带 setter：ui/input.js 的滚轮缩放要写它。cam 是对象，改字段即可，
-      // 不需要 setter。
+      get currentSaveKey() {
+        return currentSaveKey;
+      },
+      // ── 状态写入 ──
       set zoom(value) {
         zoom = value;
       },
-      ownerColor,
-      selectedUnit,
-      selectedSite,
-      statTimeSeconds,
-      domainName,
-      toast,
-      ensureStatsStarted,
-      computeDimensions,
-      // 大厅预览按当前选的尺寸/纵横比重算 W、H，见 ui/lobby.js 文件头。
-      // 用一个函数而不是两个 setter：W 和 H 永远一起改，分开写迟早会漏一个。
+      set currentSaveKey(value) {
+        currentSaveKey = value;
+      },
+      setFastSim: (value) => {
+        fastSim = value;
+      },
       setDimensions: (w, h) => {
         W = w;
         H = h;
@@ -4591,77 +4752,58 @@
         canvas.width = w;
         canvas.height = h;
       },
-      // 换局/读档时把视角复位。cam 是对象所以能直接改字段，zoom 得赋值。
       resetCamera: () => {
         cam.x = 0;
         cam.y = 0;
         zoom = 1;
       },
-      listSaves: () => savesApi.listSaves(),
+      // ── core/queries.js：棋盘查询 ──
+      inBounds: (x, y) => queriesApi.inBounds(x, y),
+      adjacent4: (x, y) => queriesApi.adjacent4(x, y),
+      adjacent8: (x, y) => queriesApi.adjacent8(x, y),
+      getUnit: (x, y) => queriesApi.getUnit(x, y),
+      unitsAt: (x, y) => queriesApi.unitsAt(x, y),
+      getSite: (x, y) => queriesApi.getSite(x, y),
+      isLandTile: (x, y) => queriesApi.isLandTile(x, y),
+      isWaterTile: (x, y) => queriesApi.isWaterTile(x, y),
+      isCoastalWater: (x, y) => queriesApi.isCoastalWater(x, y),
+      isDeepWater: (x, y) => queriesApi.isDeepWater(x, y),
+      // ── core/owners.js：阵营 ──
+      teamOf: (owner) => ownersApi.teamOf(owner),
+      areAllies: (a, b) => ownersApi.areAllies(a, b),
+      areEnemies: (a, b) => ownersApi.areEnemies(a, b),
+      ownerColor: (owner) => ownersApi.ownerColor(owner),
+      ownerName: (owner) => ownersApi.ownerName(owner),
+      ownerShort: (owner) => ownersApi.ownerShort(owner),
+      ownerOrder: () => ownersApi.ownerOrder(),
+      tierName: (tier) => ownersApi.tierName(tier),
+      domainName: (domain) => ownersApi.domainName(domain),
+      computeDimensions: (sizeKey, aspectKey) => ownersApi.computeDimensions(sizeKey, aspectKey),
+      // ── core/timing.js ──
+      pause: (ms) => timingApi.pause(ms),
+      aiStepDelay: () => timingApi.aiStepDelay(),
+      // ── game/stats.js：统计写入 ──
+      ensureStatsStarted: () => statsApi.ensureStatsStarted(),
+      statTimeSeconds: () => statsApi.statTimeSeconds(),
+      recordStatSnapshot: (label) => statsApi.recordStatSnapshot(label),
+      incrementStat: (bucket, owner, value) => statsApi.incrementStat(bucket, owner, value),
+      incrementStrat: (owner, key, value) => statsApi.incrementStrat(owner, key, value),
+      // ── ui/notify.js ──
+      log: (text, kind) => notifyApi.log(text, kind),
+      toast: (text) => notifyApi.toast(text),
+      // ── game/turnflow.js ──
+      captureSite: (unitEntry) => turnFlowApi.captureSite(unitEntry),
+      advanceTurn: () => turnFlowApi.advanceTurn(),
+      // ── game/turn.js ──
+      checkEnd: () => turnApi.checkEnd(),
       sideLabel: () => turnApi.sideLabel(),
+      // ── game/combat.js ──
       siteBonus: (siteEntry, unitEntry, key) => combatApi.siteBonus(siteEntry, unitEntry, key),
-      sellRefund: (unitEntry) => buildApi.sellRefund(unitEntry),
-      get currentSaveKey() {
-        return currentSaveKey;
-      },
-      set currentSaveKey(value) {
-        currentSaveKey = value;
-      },
-      inBounds: inBounds2,
-      adjacent4: adjacent42,
-      adjacent8: adjacent82,
-      unitsAt,
-      captureSite,
-      getUnit,
-      getSite,
-      isLandTile,
-      isWaterTile,
-      isCoastalWater,
-      isDeepWater,
-      areAllies,
-      areEnemies,
-      ownerName,
-      ownerShort,
-      teamOf,
-      tierName,
-      ownerOrder,
-      supportSites: (unitEntry) => transportApi.supportSites(unitEntry),
-      moveUnit: (unitEntry, x, y) => transportApi.moveUnit(unitEntry, x, y),
-      reachable: (unitEntry) => reachable(unitEntry),
-      enemyThreat: (owner, x, y) => scoringApi.enemyThreat(owner, x, y),
-      strategicLandingScore: (owner, cell) => scoringApi.strategicLandingScore(owner, cell),
-      log,
-      incrementStat,
-      incrementStrat,
-      recordStatSnapshot,
-      grantKills,
-      logAiDecision: (owner, text) => intentApi.logAiDecision(owner, text),
-      refresh,
-      pause,
-      aiStepDelay,
-      advanceTurn,
-      strategicSiteValue: (siteEntry, owner, unitEntry) => scoringApi.strategicSiteValue(siteEntry, owner, unitEntry),
-      siteProjectionValue: (owner, siteEntry, lookahead) => scoringApi.siteProjectionValue(owner, siteEntry, lookahead),
-      cityEconomyValue: (siteEntry, owner) => scoringApi.cityEconomyValue(siteEntry, owner),
-      isBridgeheadSite: (siteEntry) => scoringApi.isBridgeheadSite(siteEntry),
-      friendSupport: (owner, x, y) => scoringApi.friendSupport(owner, x, y),
-      targetValue: (unitEntry) => scoringApi.targetValue(unitEntry),
-      futureReach: (unitEntry, lookahead) => pathingApi.futureReach(unitEntry, lookahead),
-      buildDistanceField: (unitEntry, target) => pathingApi.buildDistanceField(unitEntry, target),
-      hasLandReachToEnemyCity: (owner) => pathingApi.hasLandReachToEnemyCity(owner),
-      landUnitCanReachForeignCity: (unitEntry) => pathingApi.landUnitCanReachForeignCity(unitEntry),
-      allyCongestion: (owner, cell, excludeId) => scoringApi.allyCongestion(owner, cell, excludeId),
-      frontlineCount: (owner, target, radius) => scoringApi.frontlineCount(owner, target, radius),
-      nearbyEnemies: (cell, owner, radius) => scoringApi.nearbyEnemies(cell, owner, radius),
-      unitRoleCellBonus: (owner, unitEntry, cell, intent) => scoringApi.unitRoleCellBonus(owner, unitEntry, cell, intent),
-      unitRoleTargetBonus: (unitEntry, enemy, intent) => scoringApi.unitRoleTargetBonus(unitEntry, enemy, intent),
-      bestObjective: (owner, unitEntry, intent) => intentApi.bestObjective(owner, unitEntry, intent),
-      projectedPressure: (owner, target, lookahead, excludeId) => intentApi.projectedPressure(owner, target, lookahead, excludeId),
       previewCombat: (attacker, defender, fromCell, deterministic) => combatApi.previewCombat(attacker, defender, fromCell, deterministic),
-      loadTransport: (transport, passenger) => transportApi.loadTransport(transport, passenger),
-      canLoadTransport: (transport, passenger) => transportApi.canLoadTransport(transport, passenger),
-      canUnloadTransport: (transport, x, y) => transportApi.canUnloadTransport(transport, x, y),
-      unloadTransport: (transport, x, y) => transportApi.unloadTransport(transport, x, y),
+      canAttack: (attacker, defender, fromCell) => combatApi.canAttack(attacker, defender, fromCell),
+      attack: (attacker, defender) => combatApi.attack(attacker, defender),
+      // ── game/build.js ──
+      sellRefund: (unitEntry) => buildApi.sellRefund(unitEntry),
       ownedUnitCount: (owner, domain) => buildApi.ownedUnitCount(owner, domain),
       unitCapFor: (domain) => buildApi.unitCapFor(domain),
       atUnitCap: (owner, domain) => buildApi.atUnitCap(owner, domain),
@@ -4673,109 +4815,144 @@
       canBuildCamp: (unitEntry) => buildApi.canBuildCamp(unitEntry),
       canEngineerLaunch: (unitEntry, product, cell, cargoTypes) => buildApi.canEngineerLaunch(unitEntry, product, cell, cargoTypes),
       engineerLaunch: (unitEntry, product, cell, cargoTypes) => buildApi.engineerLaunch(unitEntry, product, cell, cargoTypes),
-      canAttack: (attacker, defender, fromCell) => combatApi.canAttack(attacker, defender, fromCell),
-      attack: (attacker, defender) => combatApi.attack(attacker, defender),
       buildableTypes: (siteEntry) => buildApi.buildableTypes(siteEntry),
       buildAtSite: (owner, siteEntry, type, options) => buildApi.buildAtSite(owner, siteEntry, type, options),
-      clearPendingOrder,
-      checkEnd: () => turnApi.checkEnd(),
+      // ── game/transport.js ──
+      supportSites: (unitEntry) => transportApi.supportSites(unitEntry),
+      moveUnit: (unitEntry, x, y) => transportApi.moveUnit(unitEntry, x, y),
+      loadTransport: (transport, passenger) => transportApi.loadTransport(transport, passenger),
+      canLoadTransport: (transport, passenger) => transportApi.canLoadTransport(transport, passenger),
+      canUnloadTransport: (transport, x, y) => transportApi.canUnloadTransport(transport, x, y),
+      unloadTransport: (transport, x, y) => transportApi.unloadTransport(transport, x, y),
+      // ── ai/scoring.js ──
+      enemyThreat: (owner, x, y) => scoringApi.enemyThreat(owner, x, y),
+      strategicLandingScore: (owner, cell) => scoringApi.strategicLandingScore(owner, cell),
+      strategicSiteValue: (siteEntry, owner, unitEntry) => scoringApi.strategicSiteValue(siteEntry, owner, unitEntry),
+      siteProjectionValue: (owner, siteEntry, lookahead) => scoringApi.siteProjectionValue(owner, siteEntry, lookahead),
+      cityEconomyValue: (siteEntry, owner) => scoringApi.cityEconomyValue(siteEntry, owner),
+      isBridgeheadSite: (siteEntry) => scoringApi.isBridgeheadSite(siteEntry),
+      friendSupport: (owner, x, y) => scoringApi.friendSupport(owner, x, y),
+      targetValue: (unitEntry) => scoringApi.targetValue(unitEntry),
+      allyCongestion: (owner, cell, excludeId) => scoringApi.allyCongestion(owner, cell, excludeId),
+      frontlineCount: (owner, target, radius) => scoringApi.frontlineCount(owner, target, radius),
+      nearbyEnemies: (cell, owner, radius) => scoringApi.nearbyEnemies(cell, owner, radius),
+      unitRoleCellBonus: (owner, unitEntry, cell, intent) => scoringApi.unitRoleCellBonus(owner, unitEntry, cell, intent),
+      unitRoleTargetBonus: (unitEntry, enemy, intent) => scoringApi.unitRoleTargetBonus(unitEntry, enemy, intent),
+      // ── ai/pathing.js ──
+      futureReach: (unitEntry, lookahead) => pathingApi.futureReach(unitEntry, lookahead),
+      buildDistanceField: (unitEntry, target) => pathingApi.buildDistanceField(unitEntry, target),
+      hasLandReachToEnemyCity: (owner) => pathingApi.hasLandReachToEnemyCity(owner),
+      landUnitCanReachForeignCity: (unitEntry) => pathingApi.landUnitCanReachForeignCity(unitEntry),
+      // ── ai/intent.js ──
+      logAiDecision: (owner, text) => intentApi.logAiDecision(owner, text),
+      bestObjective: (owner, unitEntry, intent) => intentApi.bestObjective(owner, unitEntry, intent),
+      projectedPressure: (owner, target, lookahead, excludeId) => intentApi.projectedPressure(owner, target, lookahead, excludeId),
+      // ── game/movement.js ──
+      reachable: (unitEntry) => movementApi.reachable(unitEntry),
+      // ── render/board.js ──
       minZoom: () => boardApi.minZoom(),
       clampCam: () => boardApi.clampCam(),
       mapIsPanned: () => boardApi.mapIsPanned(),
-      loadPayload: (payload) => loadPayload(payload),
+      // ── core/queries.js（接上）──
+      selectedUnit: () => queriesApi.selectedUnit(),
+      selectedSite: () => queriesApi.selectedSite(),
+      // ── io/saves.js ──
+      listSaves: () => savesApi.listSaves(),
+      // ── ui/screens.js ──
+      loadPayload: (payload) => screensApi.loadPayload(payload),
+      // ── 跨层的小动作。都太短，不值得为它们单开模块。 ──
+      clearPendingOrder: () => {
+        if (game) {
+          game.pendingOrder = null;
+        }
+      },
+      ownerExists: (owner) => ownersApi.ownerExists(owner),
+      // 击杀累积到阈值就晋升，顺带补一点当前移动力（否则升级要等下回合才生效）。
+      grantKills: (unitEntry, kills) => {
+        if (!unitEntry) {
+          return;
+        }
+        unitEntry.kills += kills;
+        const nextRank = rankFromKills(unitEntry.kills);
+        if (nextRank !== unitEntry.rank) {
+          unitEntry.rank = nextRank;
+          unitEntry.maxMove = effectiveMove(unitEntry);
+          unitEntry.move = Math.max(unitEntry.move, Math.min(unitEntry.maxMove, unitEntry.move + 1));
+          rt.log(`${rt.ownerName(unitEntry.owner)}的${typeMeta(unitEntry.type).name}晋升为 ${nextRank} 级老兵。`, "system");
+        }
+      },
+      // 界面刷新的唯一入口。fastSim 下整个界面层都不执行 —— 这既是无头模拟快的
+      // 原因，也是它的盲区所在（补救见 sim/smoke-render.js）。
+      refresh: () => {
+        if (fastSim) {
+          return;
+        }
+        boardApi.draw();
+        panelsApi.updatePanels();
+      },
       hidePauseModal: () => $("pauseModal")?.classList.add("hidden"),
       onGameOver: (win, text) => {
         $("modalTitle").textContent = win === null ? "对局结束" : win ? "胜利！" : "战败";
         $("modalText").textContent = text;
         $("statsPanel").classList.remove("hidden");
-        renderStatsSummary(true);
-        drawStatsChart();
+        statsRenderApi.renderStatsSummary(true);
+        statsRenderApi.drawStatsChart();
         $("overlay").classList.remove("hidden");
-        refresh();
+        rt.refresh();
       }
     };
-    const { movementCost, passable, movementNeighbors, reachable } = createMovement(rt);
+    ownersApi = createOwners(rt);
+    queriesApi = createQueries(rt);
+    timingApi = createTiming(rt);
+    statsApi = createStats(rt);
+    notifyApi = createNotify(rt);
+    const movementApi = createMovement(rt);
     buildApi = createBuild(rt);
     const {
-      terrainCellCounts,
-      unitCapFor,
-      ownedUnitCount,
-      atUnitCap,
-      campCount,
-      unitBuildCost,
-      sellRefund,
-      sellUnit,
-      buildableTypes,
-      siteUpgradeCost,
       buildBudgetLeft,
-      recordBuild,
       buildAtSite,
       upgradeSite,
       fullHealSite,
       aiRepair,
-      consumeAction,
-      engineerBuildCells,
-      canBuildCamp,
-      canEngineerLaunch,
+      sellUnit,
       buildCamp,
-      engineerLaunch
+      engineerLaunch,
+      canBuildCamp
     } = buildApi;
     turnApi = createTurn(rt);
     const {
       healOwner,
       grantIncome,
       decayTemporarySites,
-      teamStandings,
       resolveStalemate,
-      checkEnd,
-      finish,
-      endGameNeutral,
-      sideLabel
+      endGameNeutral
     } = turnApi;
     transportApi = createTransport(rt);
+    combatApi = createCombat(rt);
+    savesApi = createSaves(rt);
     const {
-      moveUnit,
-      canLoadTransport,
-      loadTransport,
-      canUnloadTransport,
-      unloadTransport,
-      supportSites
-    } = transportApi;
+      buildSavePayload,
+      saveAsNewSave,
+      overwriteCurrentSave,
+      importSaveToList,
+      currentSaveName,
+      loadSave,
+      deleteSave,
+      readSave
+    } = savesApi;
     const {
-      collectLandCells,
       makeCities,
       makeSpecialSites,
-      nearestCoastalWater,
       makeNavalSites,
       spawnLand,
       spawnSea
     } = createWorldgen(rt);
     scoringApi = createScoring(rt);
-    const {
-      strategicSiteValue,
-      isBridgeheadSite,
-      frontlineCount,
-      siteProjectionValue,
-      enemyThreat,
-      friendSupport,
-      allyCongestion,
-      cityEconomyValue,
-      targetValue,
-      nearbyEnemies,
-      unitRoleCellBonus,
-      unitRoleTargetBonus,
-      strategicLandingScore
-    } = scoringApi;
+    const { isBridgeheadSite, frontlineCount, nearbyEnemies } = scoringApi;
     pathingApi = createPathing(rt);
     const {
-      strategicPassable,
-      buildDistanceField,
-      futureReach,
-      moveToward,
       moveTransportToward,
       bestLanding,
-      landUnitCanReachForeignCity,
-      hasLandReachToEnemyCity,
       clearDistFieldCache,
       clearLandReachCache
     } = pathingApi;
@@ -4783,11 +4960,7 @@
     const {
       frontMemory,
       decayFrontMemory,
-      rememberFrontOutcome,
-      logAiDecision,
-      bestSupport,
       bestRetreatCell,
-      projectedPressure,
       buildStrategicIntent,
       summarizeIntent,
       unitPriority,
@@ -4796,38 +4969,21 @@
       finalizeUnitState
     } = intentApi;
     const {
-      forceCrowding,
-      capacityPressure,
       autoLoadAdjacent,
       autoUnloadAdjacent,
       chooseAction,
-      buildScore,
       aiSpendGold,
       aiManageForces,
-      teamNeedsEngineer,
-      chooseTransportCargo,
       engineerBuildChoice
     } = createDecide(rt);
+    const { bridgeheadTurn, navalTurn } = createScripted(rt);
     boardApi = createBoardRenderer(rt);
+    const { draw, centerCamOn } = boardApi;
+    statsRenderApi = createStatsRenderer(rt);
+    const { chartMetrics, renderStatsSummary, drawStatsChart } = statsRenderApi;
+    panelsApi = createPanels(rt);
+    const { uiState, setCargoPreset, engineerSelected } = panelsApi;
     const {
-      draw,
-      drawSelection,
-      drawMinimap,
-      clampCam,
-      centerCamOn,
-      minZoom,
-      mapIsPanned
-    } = boardApi;
-    const { chartMetrics, statLabel, renderStatsSummary, drawStatsChart } = createStatsRenderer(rt);
-    const {
-      uiState,
-      updatePanels,
-      transportConfigMarkup,
-      setCargoPreset,
-      engineerSelected
-    } = createPanels(rt);
-    const {
-      tileFromEvent,
       selectRef,
       onBoard,
       endTurn,
@@ -4837,158 +4993,6 @@
       endPan,
       consumeContextSuppression
     } = createInput(rt);
-    function log(text, kind = "") {
-      game.logs.push({ text, kind });
-      if (game.logs.length > 80) {
-        game.logs.shift();
-      }
-    }
-    function toast(text) {
-      $("toast").textContent = text;
-      $("toast").classList.remove("hidden");
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => $("toast").classList.add("hidden"), 1800);
-    }
-    combatApi = createCombat(rt);
-    const { siteBonus, matchupBonus, computeDamage, previewCombat, canAttack, removeUnit, attack } = combatApi;
-    const {
-      bridgeheadTryAttack,
-      bridgeheadDefendCell,
-      bridgeheadProduce,
-      bridgeheadTurn,
-      navalTryAttack,
-      navalPatrolCell,
-      navalLandHoldCell,
-      navalProduce,
-      navalTurn
-    } = createScripted(rt);
-    function captureSite(unitEntry) {
-      const siteEntry = getSite(unitEntry.x, unitEntry.y);
-      if (!siteEntry || siteEntry.owner === unitEntry.owner || areAllies(siteEntry.owner, unitEntry.owner)) {
-        return;
-      }
-      if (siteEntry.kind === "camp") {
-        game.sites = game.sites.filter((entry) => entry !== siteEntry);
-        if (game.selected?.ref === siteEntry) {
-          game.selected = null;
-        }
-        incrementStat("lostSites", siteEntry.owner, 1);
-        incrementStat("captures", unitEntry.owner, 1);
-        recordStatSnapshot("camp-destroyed");
-        log(`${ownerName(unitEntry.owner)}摧毁了${siteEntry.owner === "player" ? "你的" : ownerName(siteEntry.owner)}临时营地。`, "system");
-        return;
-      }
-      const domain = typeMeta(unitEntry.type).domain;
-      if (siteEntry.kind === "city" && domain !== "land") {
-        return;
-      }
-      if ((siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") && domain !== "sea") {
-        return;
-      }
-      const oldTier = siteEntry.tier;
-      const oldOwner = siteEntry.owner;
-      siteEntry.owner = unitEntry.owner;
-      if (siteEntry.kind !== "fortress" && Math.random() < 0.12) {
-        siteEntry.tier = Math.max(1, siteEntry.tier - 1);
-        siteEntry.income = Math.max(4, siteMeta(siteEntry.kind).income + (siteEntry.tier - 1) * (siteEntry.kind === "city" ? 3 : 2));
-      }
-      if (oldOwner !== "neutral") {
-        incrementStat("lostSites", oldOwner, 1);
-      }
-      incrementStat("captures", unitEntry.owner, 1);
-      if (siteEntry.kind === "city") {
-        incrementStrat(unitEntry.owner, "cityCaptures");
-      } else if (siteEntry.kind.startsWith("oil")) {
-        incrementStrat(unitEntry.owner, "oilCaptures");
-      } else if (siteEntry.kind === "shipyard" || siteEntry.kind === "fortress") {
-        incrementStrat(unitEntry.owner, "shipyardCaptures");
-      }
-      recordStatSnapshot("capture");
-      log(`${ownerName(unitEntry.owner)}夺取了${siteEntry.name}${siteEntry.tier < oldTier ? "，设施战损降级。" : "。"}`, "system");
-      checkEnd();
-    }
-    function beginTurn(owner, initial) {
-      if (game.over) {
-        return;
-      }
-      if (!ownerExists(owner)) {
-        advanceTurn();
-        return;
-      }
-      game.side = owner;
-      game.buildsThisTurn = game.buildsThisTurn || {};
-      game.buildsThisTurn[owner] = 0;
-      if (!initial) {
-        decayFrontMemory(owner);
-        decayTemporarySites(owner);
-        healOwner(owner);
-        grantIncome(owner);
-        aiRepair(owner);
-      }
-      for (const unitEntry of game.units.filter((entry) => entry.owner === owner)) {
-        unitEntry.maxMove = effectiveMove(unitEntry);
-        unitEntry.move = unitEntry.maxMove;
-        unitEntry.acted = false;
-        unitEntry.hasAttacked = false;
-      }
-      if (owner !== "player") {
-        game.selected = null;
-      }
-      refresh();
-      if (!initial) {
-        checkEnd();
-      }
-      if (owner !== "player" && !fastSim) {
-        setTimeout(() => {
-          if (!game.over && game.side === owner) {
-            void aiTurn(owner);
-          }
-        }, 260);
-      }
-    }
-    function advanceTurn() {
-      if (game.over) {
-        return;
-      }
-      game.currentIndex = (game.currentIndex + 1) % game.ownerOrder.length;
-      if (game.currentIndex === 0) {
-        game.turn += 1;
-        if (game.turn > MAX_TURNS && !game.freeplay && !game.over) {
-          resolveStalemate();
-          if (game.over) {
-            return;
-          }
-        }
-      }
-      beginTurn(game.ownerOrder[game.currentIndex], false);
-    }
-    function teamCanContestLand(team) {
-      if (game.sites.some((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral" && teamOf(siteEntry.owner) === team)) {
-        return true;
-      }
-      if (game.units.some((unitEntry) => teamOf(unitEntry.owner) === team && unitEntry.type === "transport" && unitEntry.cargo?.length)) {
-        return true;
-      }
-      const landUnits = game.units.filter((unitEntry) => teamOf(unitEntry.owner) === team && typeMeta(unitEntry.type).domain === "land");
-      if (landUnits.some(landUnitCanReachForeignCity)) {
-        return true;
-      }
-      const hasTransport = game.units.some((unitEntry) => teamOf(unitEntry.owner) === team && unitEntry.type === "transport");
-      const hasShipyard = game.sites.some((siteEntry) => siteEntry.kind === "shipyard" && teamOf(siteEntry.owner) === team);
-      return !!landUnits.length && (hasTransport || hasShipyard);
-    }
-    function dominantCityTeam() {
-      const cityTeams = [...new Set(game.sites.filter((siteEntry) => siteEntry.kind === "city" && siteEntry.owner !== "neutral").map((siteEntry) => teamOf(siteEntry.owner)))];
-      return cityTeams.length === 1 ? cityTeams[0] : null;
-    }
-    function refresh() {
-      if (fastSim) {
-        return;
-      }
-      draw();
-      updatePanels();
-    }
-    savesApi = createSaves(rt);
     const { aiTurn } = createTurnLoop(rt, {
       navalTurn,
       bridgeheadTurn,
@@ -5014,20 +5018,18 @@
       clearLandReachCache,
       buildCamp,
       engineerLaunch,
-      sameCell
+      sameCell: queriesApi.sameCell
     });
-    const {
-      SAVE_PREFIX: SAVE_PREFIX2,
-      listSaves,
-      buildSavePayload,
-      saveAsNewSave,
-      overwriteCurrentSave,
-      importSaveToList,
-      currentSaveName,
-      loadSave,
-      deleteSave,
-      readSave
-    } = savesApi;
+    turnFlowApi = createTurnFlow(rt, {
+      decayFrontMemory,
+      decayTemporarySites,
+      healOwner,
+      grantIncome,
+      aiRepair,
+      resolveStalemate,
+      aiTurn
+    });
+    const { beginTurn } = turnFlowApi;
     const {
       fillSelectOptions,
       syncSliderLabels,
@@ -5038,7 +5040,6 @@
       renderSaveList,
       renderRules
     } = createLobby(rt);
-    let screensApi;
     const { newGame } = createNewGame(rt, {
       makeCities,
       makeNavalSites,
@@ -5060,7 +5061,7 @@
       clearLandReachCache,
       aiTurn
     });
-    const { runLoadingScreen, showScreen, startGameFlow, loadPayload } = screensApi;
+    const { showScreen, startGameFlow } = screensApi;
     const { bindAll } = createBindings(rt, {
       renderAISettings,
       syncSliderLabels,
@@ -5100,12 +5101,12 @@
       deleteSave,
       readSave
     });
-    const { debugSummary, debugRunResult, fastRun, fastBatch } = createFastSim(rt, {
-      advanceTurn,
+    const { debugSummary, fastRun, fastBatch } = createFastSim(rt, {
+      advanceTurn: () => turnFlowApi.advanceTurn(),
       aiTurn,
       newGame,
-      ownerExists,
-      macroYield
+      ownerExists: (owner) => ownersApi.ownerExists(owner),
+      macroYield: () => timingApi.macroYield()
     });
     function setup() {
       fillSelectOptions();
@@ -5121,7 +5122,7 @@
         newGame,
         resolveStalemate,
         draw,
-        refresh,
+        refresh: () => rt.refresh(),
         renderStatsSummary,
         drawStatsChart,
         drawPreview,
