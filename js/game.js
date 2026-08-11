@@ -1129,6 +1129,145 @@
     return { healOwner, grantIncome, decayTemporarySites, teamStandings, resolveStalemate, checkEnd, finish, endGameNeutral, sideLabel };
   }
 
+  // src/game/newgame.js
+  var START_GOLD = 45;
+  var EMPTY_STRAT = {
+    stalls: 0,
+    reserves: 0,
+    reroutes: 0,
+    retreats: 0,
+    cityCaptures: 0,
+    oilCaptures: 0,
+    shipyardCaptures: 0,
+    engineerLandings: 0,
+    transportLaunches: 0,
+    campsBuilt: 0,
+    sells: 0
+  };
+  function createNewGame(rt, deps) {
+    const $ = (id) => document.getElementById(id);
+    const {
+      makeCities,
+      makeNavalSites,
+      makeSpecialSites,
+      spawnLand,
+      spawnSea,
+      centerCamOn,
+      clearDistFieldCache,
+      beginTurn,
+      runLoadingScreen
+    } = deps;
+    function readLobbyConfig() {
+      const aiCount = Number($("aiSelect").value);
+      const spectator = $("spectatorSelect")?.value === "on";
+      const owners = spectator ? Array.from({ length: aiCount }, (_, index) => `ai${index}`) : ["player", ...Array.from({ length: aiCount }, (_, index) => `ai${index}`)];
+      const teams = { player: $("playerTeamSelect").value };
+      const aiProfiles = {};
+      const ownerColors = { player: COLOR_PRESETS[$("playerColorSelect").value || "azure"]?.value || "#55a3ff" };
+      for (let i = 0; i < aiCount; i++) {
+        teams[`ai${i}`] = $(`ai${i}Team`)?.value || TEAMS[(i + 1) % TEAMS.length];
+        aiProfiles[`ai${i}`] = { diff: $(`ai${i}Diff`)?.value || "medium", agg: $(`ai${i}Agg`)?.value || "balanced" };
+        ownerColors[`ai${i}`] = COLOR_PRESETS[$(`ai${i}Color`)?.value || "crimson"]?.value || OWNER_COLORS[i % OWNER_COLORS.length];
+      }
+      return { aiCount, spectator, owners, teams, aiProfiles, ownerColors };
+    }
+    function readSettings(config) {
+      return {
+        map: $("mapSelect").value,
+        mode: $("modeSelect").value,
+        spectator: config.spectator,
+        ai: config.aiCount,
+        start: Number($("startUnitsSelect").value),
+        size: $("sizeSelect").value,
+        aspect: $("aspectSelect").value,
+        aiSpeed: Number($("aiSpeed").value),
+        complexity: $("complexitySelect").value,
+        spread: Number($("citySpread").value),
+        deploy: $("deploymentSelect").value,
+        buildCap: Number($("buildCap").value),
+        incomeMult: Number($("incomeMult").value),
+        siteDensity: Number($("siteDensity").value)
+      };
+    }
+    function emptyStats(owners) {
+      return {
+        startTime: null,
+        endTime: null,
+        chartIndex: 0,
+        produced: Object.fromEntries(owners.map((owner) => [owner, 0])),
+        kills: Object.fromEntries(owners.map((owner) => [owner, 0])),
+        losses: Object.fromEntries(owners.map((owner) => [owner, 0])),
+        captures: Object.fromEntries(owners.map((owner) => [owner, 0])),
+        lostSites: Object.fromEntries(owners.map((owner) => [owner, 0])),
+        strat: Object.fromEntries(owners.map((owner) => [owner, { ...EMPTY_STRAT }])),
+        history: []
+      };
+    }
+    function newGame() {
+      const config = readLobbyConfig();
+      const { owners, spectator } = config;
+      const dimensions = rt.computeDimensions($("sizeSelect").value, $("aspectSelect").value);
+      rt.setDimensions(dimensions.w, dimensions.h);
+      rt.setCellSize(dimensions.w <= 22 ? 52 : 44);
+      const W = rt.W;
+      const H = rt.H;
+      const S = rt.S;
+      rt.resizeCanvas(Math.min(W * S, VIEW_MAX_W), Math.min(H * S, VIEW_MAX_H));
+      rt.resetCamera();
+      rt.currentSaveKey = null;
+      clearDistFieldCache();
+      rt.setGame({
+        terrain: terrainFor($("mapSelect").value, $("complexitySelect").value, W, H),
+        units: [],
+        sites: [],
+        ownerOrder: owners,
+        currentIndex: 0,
+        side: "player",
+        turn: 1,
+        selected: null,
+        over: false,
+        logs: [],
+        teams: config.teams,
+        ownerColors: config.ownerColors,
+        aiProfiles: config.aiProfiles,
+        aiFrontMemory: {},
+        freeplay: false,
+        pendingOrder: null,
+        goldByOwner: Object.fromEntries(owners.map((owner) => [owner, START_GOLD])),
+        stats: emptyStats(owners),
+        settings: readSettings(config)
+      });
+      const game = rt.game;
+      game.sites = makeCities(config.aiCount, game.settings.size, game.settings.spread);
+      game.sites.push(...makeNavalSites());
+      game.sites.push(...makeSpecialSites());
+      const used = new Set(game.sites.filter((entry) => entry.kind === "city").map((entry) => cellKey(entry.x, entry.y)));
+      for (const owner of owners) {
+        const homes = game.sites.filter((entry) => entry.owner === owner && entry.kind === "city");
+        if (!homes.length) {
+          continue;
+        }
+        const seaSpawn = game.settings.start >= 4 ? spawnSea(owner, game.settings.start >= 6 ? 2 : 1) : 0;
+        spawnLand(owner, homes, Math.max(0, game.settings.start - seaSpawn), used, game.settings.deploy);
+      }
+      $("statsPanel").classList.add("hidden");
+      $("statsSummary").innerHTML = "";
+      rt.recordStatSnapshot("deploy");
+      rt.log(`版本 0.1.2 战局开始：${MAPS[game.settings.map].name} · ${SIZES[game.settings.size].name} · ${ASPECTS[game.settings.aspect].name} ${W}×${H} · ${game.sites.filter((entry) => entry.kind === "city").length} 座城市 · ${game.sites.filter((entry) => entry.kind === "shipyard").length} 座船坞。`, "system");
+      const focusCity = game.sites.find((entry) => entry.kind === "city" && entry.owner === (spectator ? owners[0] : "player"));
+      if (focusCity) {
+        centerCamOn(focusCity.x, focusCity.y);
+      }
+      const startFirstTurn = () => beginTurn(owners[0], true);
+      if (rt.fastSim) {
+        startFirstTurn();
+      } else {
+        runLoadingScreen(owners, startFirstTurn);
+      }
+    }
+    return { newGame, readLobbyConfig, readSettings, emptyStats };
+  }
+
   // src/world/worldgen.js
   function pickSpacedCells(pool, count, minGap) {
     const picks = [];
@@ -2442,6 +2581,162 @@
     };
   }
 
+  // src/ai/turnloop.js
+  function createTurnLoop(rt, deps) {
+    const {
+      // 脚本对手
+      navalTurn,
+      bridgeheadTurn,
+      // 意图层
+      buildStrategicIntent,
+      summarizeIntent,
+      frontMemory,
+      unitPriority,
+      computeUnitState,
+      finalizeUnitState,
+      bestRetreatCell,
+      bestObjective,
+      // 决策层
+      chooseAction,
+      aiManageForces,
+      aiSpendGold,
+      autoLoadAdjacent,
+      autoUnloadAdjacent,
+      engineerBuildChoice,
+      // 评分与寻路
+      isBridgeheadSite,
+      frontlineCount,
+      nearbyEnemies,
+      bestLanding,
+      moveTransportToward,
+      clearLandReachCache,
+      // 动作
+      buildCamp,
+      engineerLaunch,
+      sameCell
+    } = deps;
+    async function aiTurn(owner) {
+      const game = rt.game;
+      const profile = game.aiProfiles[owner] || { diff: "medium", agg: "balanced" };
+      clearLandReachCache();
+      if (DIFF[profile.diff]?.scripted) {
+        if (DIFF[profile.diff].script === "naval") {
+          await navalTurn(owner);
+        } else {
+          await bridgeheadTurn(owner);
+        }
+        return;
+      }
+      const intent = buildStrategicIntent(owner, profile);
+      const memory = frontMemory(owner);
+      rt.logAiDecision(owner, summarizeIntent(intent));
+      if (intent.cooledTargets?.length) {
+        rt.incrementStrat(owner, "reroutes");
+        rt.logAiDecision(owner, `暂时避开受阻方向：${intent.cooledTargets.join("、")}。`);
+      }
+      aiManageForces(owner);
+      aiSpendGold(owner, profile);
+      rt.refresh();
+      await rt.pause(rt.aiStepDelay());
+      const units = game.units.filter((entry) => entry.owner === owner).sort((a, b) => unitPriority(b, intent) - unitPriority(a, intent));
+      for (const unitEntry of [...units]) {
+        if (game.over) {
+          break;
+        }
+        if (!game.units.includes(unitEntry)) {
+          continue;
+        }
+        const state = computeUnitState(unitEntry);
+        const startCell = { x: unitEntry.x, y: unitEntry.y };
+        const assaultKey = intent.assaultSite ? `site:${cellKey(intent.assaultSite.x, intent.assaultSite.y)}` : null;
+        const bridgeheadCooldown = assaultKey ? memory[assaultKey]?.cooldown > 0 : false;
+        const bridgeheadBlocked = intent.assaultSite && isBridgeheadSite(intent.assaultSite) && (bridgeheadCooldown || state.rerouteTurns > 0 && state.failedObjectiveKey === assaultKey) && dist(unitEntry, intent.assaultSite) <= 4;
+        if (bridgeheadBlocked && typeMeta(unitEntry.type).domain === "land" && profile.agg !== "reckless") {
+          const retreatCell = bestRetreatCell(owner, unitEntry, intent.assaultSite);
+          if (retreatCell && (retreatCell.x !== unitEntry.x || retreatCell.y !== unitEntry.y)) {
+            rt.incrementStrat(owner, "retreats");
+            rt.logAiDecision(owner, `${typeMeta(unitEntry.type).name}从桥头暂退，在 ${intent.assaultSite.name} 方向重整。`);
+            rt.moveUnit(unitEntry, retreatCell.x, retreatCell.y);
+            finalizeUnitState(unitEntry, state, assaultKey || "idle", true);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+        }
+        if (profile.agg === "cautious" && intent.assaultSite && isBridgeheadSite(intent.assaultSite)) {
+          const currentFrontline = frontlineCount(owner, intent.assaultSite, 3);
+          const isReserveCandidate = typeMeta(unitEntry.type).domain === "land" && unitEntry.type !== "engineer" && (dist(unitEntry, intent.assaultSite) > 4 || typeMeta(unitEntry.type).range >= 2);
+          if (currentFrontline >= 4 && isReserveCandidate && unitEntry.hp > unitEntry.maxHp * 0.65) {
+            rt.incrementStrat(owner, "reserves");
+            rt.logAiDecision(owner, `${typeMeta(unitEntry.type).name}作为桥头预备队待机。`);
+            finalizeUnitState(unitEntry, state, `reserve:${cellKey(intent.assaultSite.x, intent.assaultSite.y)}`, false);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+        }
+        if (unitEntry.type === "transport") {
+          if (!unitEntry.cargo.length && autoLoadAdjacent(unitEntry)) {
+            finalizeUnitState(unitEntry, state, "transport-load", false);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+          if (unitEntry.cargo.length && autoUnloadAdjacent(unitEntry)) {
+            finalizeUnitState(unitEntry, state, "transport-unload", false);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+          const landing = bestLanding(owner, unitEntry);
+          if (landing) {
+            const moved = moveTransportToward(unitEntry, landing);
+            const nearThreat = nearbyEnemies({ x: unitEntry.x, y: unitEntry.y }, owner, 2);
+            const escortAdjacent = game.units.some((entry) => entry.owner === owner && entry.type === "warship" && dist(entry, unitEntry) <= 2);
+            if (unitEntry.cargo.length && (nearThreat === 0 || escortAdjacent)) {
+              autoUnloadAdjacent(unitEntry);
+            }
+            finalizeUnitState(unitEntry, state, `landing:${cellKey(landing.x, landing.y)}`, moved);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+        }
+        if (unitEntry.type === "engineer") {
+          const engineerChoice = engineerBuildChoice(owner, unitEntry, intent);
+          if (engineerChoice?.kind === "camp" && buildCamp(unitEntry)) {
+            finalizeUnitState(unitEntry, state, "camp", false);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+          if (engineerChoice?.cell && engineerLaunch(unitEntry, engineerChoice.kind, engineerChoice.cell, engineerChoice.cargoTypes || [])) {
+            finalizeUnitState(unitEntry, state, `${engineerChoice.kind}:${cellKey(engineerChoice.cell.x, engineerChoice.cell.y)}`, false);
+            rt.refresh();
+            await rt.pause(rt.aiStepDelay());
+            continue;
+          }
+        }
+        const choice = chooseAction(owner, unitEntry, profile, intent);
+        const objectiveSite = choice.target ? null : bestObjective(owner, unitEntry, intent);
+        const objectiveKey = objectiveSite ? `site:${cellKey(objectiveSite.x, objectiveSite.y)}` : choice.target ? `attack:${choice.target.id}` : "idle";
+        if (choice.move && (choice.move.x !== unitEntry.x || choice.move.y !== unitEntry.y)) {
+          rt.moveUnit(unitEntry, choice.move.x, choice.move.y);
+        }
+        if (choice.target && game.units.includes(unitEntry) && game.units.includes(choice.target) && rt.canAttack(unitEntry, choice.target)) {
+          rt.attack(unitEntry, choice.target);
+        }
+        finalizeUnitState(unitEntry, state, objectiveKey, !sameCell(startCell, unitEntry));
+        rt.refresh();
+        await rt.pause(rt.aiStepDelay());
+      }
+      if (!game.over) {
+        rt.advanceTurn();
+      }
+    }
+    return { aiTurn };
+  }
+
   // src/render/board.js
   function createBoardRenderer(rt) {
     function drawSelection(x, y, color) {
@@ -3235,6 +3530,188 @@
     };
   }
 
+  // src/ui/screens.js
+  var LOADING_TIPS = [
+    "战术：长枪兵对骑兵有克制加成，把它们摆在骑兵冲锋的正面。",
+    "战术：战船克制运兵船，护航或拦截时优先让战船贴身。",
+    "技巧：运兵船现在最多可搭载 5 个陆军单位，登陆后立即释放。",
+    "技巧：运兵船卸下的单位可在同一格堆叠（每格最多 3 个），点击堆叠格可循环选择操控。",
+    "技巧：大地图下长按右键并拖动鼠标即可平移视野，右下角小地图显示当前视口。",
+    "战术：工程师能在海边直接造舰，也能原地建立可维持 3 回合的临时营地。",
+    "经济：占领油田和军营能显著增强产能，冷酷 AI 会优先争夺它们。",
+    "战术：骑兵满机动接战时获得冲锋加成，保留移动力再发起冲锋。",
+    "技巧：驻军可花金币修整，残血精锐撤回城市回血再战更划算。",
+    "历史：两栖登陆的关键从来不是抢滩，而是能否持续把后续兵力运上岸。",
+    "战术：弩手爆发高但脆弱，用剑士与近卫在前排为其挡刀。",
+    "技巧：单位击杀累积可晋升老兵，提升机动与续航，注意保护高阶单位。",
+    "提示：设置里可调收入倍率与每回合造兵上限，用来打造快节奏或持久战。",
+    "战术：把富余陆军用空运兵船循环转运到敌军薄弱的海岸，是破解岛屿僵局的钥匙。",
+    "历史：制海权决定制陆权——失去海上补给线的滩头阵地终将枯萎。"
+  ];
+  var BLOCK_COUNT = 44;
+  function createScreens(rt, deps) {
+    const $ = (id) => document.getElementById(id);
+    const {
+      newGame,
+      drawPreview,
+      renderLobbyPreview,
+      renderSaveList,
+      centerCamOn,
+      clearDistFieldCache,
+      clearLandReachCache,
+      aiTurn
+    } = deps;
+    function makeBlocks() {
+      $("loadingBlocks").innerHTML = Array.from({ length: BLOCK_COUNT }, () => '<i class="lblock"></i>').join("");
+      return [...$("loadingBlocks").querySelectorAll(".lblock")];
+    }
+    function lightBlocks(blocks, progress) {
+      const lit = Math.round(BLOCK_COUNT * progress / 100);
+      blocks.forEach((block, index) => block.classList.toggle("on", index < lit));
+      $("loadingPercent").textContent = Math.round(progress);
+    }
+    function runLoadingScreen(owners, done) {
+      const screen = $("loadingScreen");
+      if (!screen) {
+        done();
+        return;
+      }
+      const game = rt.game;
+      drawPreview();
+      $("loadingMapName").textContent = `${MAPS[game.settings.map].name} · 部署中`;
+      $("loadingMapMeta").textContent = `${SIZES[game.settings.size].name} · ${rt.W}×${rt.H} · ${game.sites.filter((e) => e.kind === "city").length} 城 / ${game.sites.filter((e) => e.kind === "shipyard").length} 船坞`;
+      const blocks = makeBlocks();
+      const sides = owners.map((owner) => ({ owner, target: 70 + Math.random() * 30, value: 0 }));
+      $("loadingSides").innerHTML = sides.map((side) => `<div class="lside"><span class="ldot" style="background:${rt.ownerColor(side.owner)}"></span><span class="lname">${rt.ownerName(side.owner)}</span><span class="lbar"><i data-owner="${side.owner}"></i></span><span class="lpct" data-pct="${side.owner}">0%</span></div>`).join("");
+      let tipIndex = Math.floor(Math.random() * LOADING_TIPS.length);
+      $("loadingTip").textContent = LOADING_TIPS[tipIndex];
+      screen.classList.remove("hidden");
+      let progress = 0;
+      let tipTick = 0;
+      const timer = setInterval(() => {
+        progress = Math.min(100, progress + 2 + Math.random() * 4);
+        lightBlocks(blocks, progress);
+        for (const side of sides) {
+          side.value = Math.min(100, side.value + (progress >= side.target ? 6 + Math.random() * 8 : 2 + Math.random() * 5));
+          const bar = $("loadingSides").querySelector(`i[data-owner="${side.owner}"]`);
+          const pct = $("loadingSides").querySelector(`span[data-pct="${side.owner}"]`);
+          if (bar) {
+            bar.style.width = `${side.value}%`;
+          }
+          if (pct) {
+            pct.textContent = `${Math.round(side.value)}%`;
+          }
+        }
+        if (++tipTick % 14 === 0) {
+          tipIndex = (tipIndex + 1) % LOADING_TIPS.length;
+          $("loadingTip").textContent = LOADING_TIPS[tipIndex];
+        }
+        if (progress >= 100 && sides.every((side) => side.value >= 100)) {
+          clearInterval(timer);
+          setTimeout(() => {
+            screen.classList.add("hidden");
+            done();
+          }, 350);
+        }
+      }, 90);
+    }
+    function runLoadProgress(done) {
+      const screen = $("loadingScreen");
+      if (!screen) {
+        done();
+        return;
+      }
+      const game = rt.game;
+      drawPreview();
+      $("loadingMapName").textContent = `读取存档 · ${MAPS[game.settings.map]?.name || "战局"}`;
+      $("loadingMapMeta").textContent = `第 ${game.turn} 回合 · ${SIZES[game.settings.size]?.name || `${rt.W}×${rt.H}`}`;
+      $("loadingSides").innerHTML = "";
+      $("loadingTip").textContent = LOADING_TIPS[Math.floor(Math.random() * LOADING_TIPS.length)];
+      const blocks = makeBlocks();
+      screen.classList.remove("hidden");
+      const started = performance.now();
+      const minMs = 1e3;
+      let progress = 0;
+      const timer = setInterval(() => {
+        const elapsed = performance.now() - started;
+        progress = Math.min(100, Math.max(progress + 3 + Math.random() * 6, elapsed / minMs * 100));
+        lightBlocks(blocks, progress);
+        if (progress >= 100 && elapsed >= minMs) {
+          clearInterval(timer);
+          setTimeout(() => {
+            screen.classList.add("hidden");
+            done();
+          }, 200);
+        }
+      }, 60);
+    }
+    function showScreen(name) {
+      const setupEl = $("setupScreen");
+      const gameEl = $("gameScreen");
+      const infoEl = $("infoScreen");
+      if (setupEl) {
+        setupEl.classList.toggle("hidden", name !== "setup");
+      }
+      if (gameEl) {
+        gameEl.classList.toggle("hidden", name !== "game");
+      }
+      if (infoEl) {
+        infoEl.classList.toggle("hidden", name !== "info");
+      }
+      $("loadScreen")?.classList.toggle("hidden", name !== "load");
+      if (name === "setup") {
+        $("overlay")?.classList.add("hidden");
+        $("loadingScreen")?.classList.add("hidden");
+        renderLobbyPreview();
+      }
+      if (name === "load") {
+        renderSaveList();
+      }
+    }
+    function startGameFlow() {
+      showScreen("game");
+      newGame();
+    }
+    function loadPayload(payload) {
+      if (!payload?.state) {
+        return false;
+      }
+      rt.setDimensions(payload.W, payload.H);
+      rt.setCellSize(payload.S);
+      rt.resizeCanvas(Math.min(payload.W * payload.S, VIEW_MAX_W), Math.min(payload.H * payload.S, VIEW_MAX_H));
+      rt.resetCamera();
+      clearDistFieldCache();
+      clearLandReachCache();
+      rt.setGame(payload.state);
+      const game = rt.game;
+      game.selected = null;
+      game.pendingOrder = null;
+      showScreen("game");
+      const focusOwner = game.settings?.spectator ? game.ownerOrder[0] : "player";
+      const focusCity = game.sites.find((entry) => entry.kind === "city" && entry.owner === focusOwner);
+      if (focusCity) {
+        centerCamOn(focusCity.x, focusCity.y);
+      }
+      const finishLoad = () => {
+        rt.refresh();
+        if (!game.over && game.side !== "player" && !rt.fastSim) {
+          setTimeout(() => {
+            if (!game.over && game.side !== "player") {
+              void aiTurn(game.side);
+            }
+          }, 300);
+        }
+      };
+      if (rt.fastSim) {
+        finishLoad();
+      } else {
+        runLoadProgress(finishLoad);
+      }
+      return true;
+    }
+    return { runLoadingScreen, runLoadProgress, showScreen, startGameFlow, loadPayload };
+  }
+
   // src/ui/bindings.js
   function createBindings(rt, deps) {
     const $ = (id) => document.getElementById(id);
@@ -3686,6 +4163,129 @@
     };
   }
 
+  // src/debug/fastsim.js
+  function createFastSim(rt, deps) {
+    const { advanceTurn, aiTurn, newGame, ownerExists, macroYield } = deps;
+    function debugSummary() {
+      const game = rt.game;
+      if (!game) {
+        return null;
+      }
+      return {
+        turn: game.turn,
+        over: game.over,
+        side: game.side,
+        spectator: game.settings?.spectator,
+        result: game.result || null,
+        // 深拷贝：调用方常常在之后继续跑，浅引用会被后续回合改掉。
+        strat: game.stats?.strat ? JSON.parse(JSON.stringify(game.stats.strat)) : null,
+        teams: { ...game.teams },
+        logs: [...game.logs],
+        ownerOrder: [...game.ownerOrder],
+        sites: game.sites.map((siteEntry) => ({ owner: siteEntry.owner, kind: siteEntry.kind, name: siteEntry.name, x: siteEntry.x, y: siteEntry.y })),
+        units: game.units.map((unitEntry) => ({ owner: unitEntry.owner, type: unitEntry.type, x: unitEntry.x, y: unitEntry.y, hp: unitEntry.hp, rank: unitEntry.rank }))
+      };
+    }
+    function aggregateStratByTeam() {
+      const byTeam = {};
+      const strat = rt.game?.stats?.strat || {};
+      for (const owner of Object.keys(strat)) {
+        const team = rt.teamOf(owner);
+        byTeam[team] = byTeam[team] || {};
+        for (const key of Object.keys(strat[owner])) {
+          byTeam[team][key] = (byTeam[team][key] || 0) + strat[owner][key];
+        }
+      }
+      return byTeam;
+    }
+    function debugRunResult() {
+      const game = rt.game;
+      const strat = game?.stats?.strat || {};
+      const totals = {};
+      for (const owner of Object.keys(strat)) {
+        for (const key of Object.keys(strat[owner])) {
+          totals[key] = (totals[key] || 0) + strat[owner][key];
+        }
+      }
+      return {
+        turn: game.turn,
+        over: game.over,
+        result: game.result || null,
+        totals,
+        byOwner: JSON.parse(JSON.stringify(strat)),
+        byTeam: aggregateStratByTeam(),
+        cityOwners: game.sites.filter((s) => s.kind === "city").reduce((acc, s) => {
+          const t = s.owner === "neutral" ? "neutral" : rt.teamOf(s.owner);
+          acc[t] = (acc[t] || 0) + 1;
+          return acc;
+        }, {}),
+        unitsAlive: game.units.length
+      };
+    }
+    async function fastRun(cap = 150) {
+      const game = rt.game;
+      if (!game) {
+        return null;
+      }
+      rt.setFastSim(true);
+      let guard = 0;
+      const guardMax = cap * Math.max(1, game.ownerOrder.length) + 80;
+      while (!game.over && game.turn <= cap && guard < guardMax) {
+        const owner = game.side;
+        if (!ownerExists(owner) || owner === "player") {
+          advanceTurn();
+        } else {
+          await aiTurn(owner);
+        }
+        guard += 1;
+        if (guard % 40 === 0) {
+          await macroYield();
+        }
+      }
+      rt.setFastSim(false);
+      const result = debugRunResult();
+      rt.refresh();
+      return result;
+    }
+    async function fastBatch(cap = 150, rounds = 10, seed = 20260804) {
+      const runs = [];
+      const origRandom = Math.random;
+      const makeRng = (value) => {
+        let state = value >>> 0;
+        return () => {
+          state = state * 1664525 + 1013904223 >>> 0;
+          return state / 4294967296;
+        };
+      };
+      try {
+        for (let i = 0; i < rounds; i++) {
+          Math.random = makeRng(seed + i * 2654435761);
+          rt.setFastSim(true);
+          newGame();
+          const result = await fastRun(cap);
+          runs.push(result);
+        }
+      } finally {
+        Math.random = origRandom;
+      }
+      const agg = { rounds: runs.length, seed, wins: {}, avgTurns: 0, totals: {} };
+      for (const run of runs) {
+        const winnerTeam = run.result?.text?.match(/^(\S+)\s*组/)?.[1] || Object.entries(run.cityOwners).filter(([t]) => t !== "neutral").sort((a, b) => b[1] - a[1])[0]?.[0] || "未定";
+        agg.wins[winnerTeam] = (agg.wins[winnerTeam] || 0) + 1;
+        agg.avgTurns += run.turn;
+        for (const key of Object.keys(run.totals)) {
+          agg.totals[key] = (agg.totals[key] || 0) + run.totals[key];
+        }
+      }
+      agg.avgTurns = Math.round(agg.avgTurns / Math.max(1, runs.length) * 10) / 10;
+      for (const key of Object.keys(agg.totals)) {
+        agg.totals[key] = Math.round(agg.totals[key] / Math.max(1, runs.length) * 10) / 10;
+      }
+      return { agg, runs };
+    }
+    return { debugSummary, debugRunResult, aggregateStratByTeam, fastRun, fastBatch };
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -3737,119 +4337,6 @@
         game.stats.startTime = Date.now();
         recordStatSnapshot("start");
       }
-    }
-    function debugSummary() {
-      if (!game) {
-        return null;
-      }
-      return {
-        turn: game.turn,
-        over: game.over,
-        side: game.side,
-        spectator: game.settings?.spectator,
-        result: game.result || null,
-        strat: game.stats?.strat ? JSON.parse(JSON.stringify(game.stats.strat)) : null,
-        teams: { ...game.teams },
-        logs: [...game.logs],
-        ownerOrder: [...game.ownerOrder],
-        sites: game.sites.map((siteEntry) => ({ owner: siteEntry.owner, kind: siteEntry.kind, name: siteEntry.name, x: siteEntry.x, y: siteEntry.y })),
-        units: game.units.map((unitEntry) => ({ owner: unitEntry.owner, type: unitEntry.type, x: unitEntry.x, y: unitEntry.y, hp: unitEntry.hp, rank: unitEntry.rank }))
-      };
-    }
-    function aggregateStratByTeam() {
-      const byTeam = {};
-      const strat = game?.stats?.strat || {};
-      for (const owner of Object.keys(strat)) {
-        const team = teamOf(owner);
-        byTeam[team] = byTeam[team] || {};
-        for (const key of Object.keys(strat[owner])) {
-          byTeam[team][key] = (byTeam[team][key] || 0) + strat[owner][key];
-        }
-      }
-      return byTeam;
-    }
-    function debugRunResult() {
-      const strat = game?.stats?.strat || {};
-      const totals = {};
-      for (const owner of Object.keys(strat)) {
-        for (const key of Object.keys(strat[owner])) {
-          totals[key] = (totals[key] || 0) + strat[owner][key];
-        }
-      }
-      return {
-        turn: game.turn,
-        over: game.over,
-        result: game.result || null,
-        totals,
-        byOwner: JSON.parse(JSON.stringify(strat)),
-        byTeam: aggregateStratByTeam(),
-        cityOwners: game.sites.filter((s) => s.kind === "city").reduce((acc, s) => {
-          const t = s.owner === "neutral" ? "neutral" : teamOf(s.owner);
-          acc[t] = (acc[t] || 0) + 1;
-          return acc;
-        }, {}),
-        unitsAlive: game.units.length
-      };
-    }
-    async function fastRun(cap = 150) {
-      if (!game) {
-        return null;
-      }
-      fastSim = true;
-      let guard = 0;
-      const guardMax = cap * Math.max(1, game.ownerOrder.length) + 80;
-      while (!game.over && game.turn <= cap && guard < guardMax) {
-        const owner = game.side;
-        if (!ownerExists(owner) || owner === "player") {
-          advanceTurn();
-        } else {
-          await aiTurn(owner);
-        }
-        guard += 1;
-        if (guard % 40 === 0) {
-          await macroYield();
-        }
-      }
-      fastSim = false;
-      const result = debugRunResult();
-      refresh();
-      return result;
-    }
-    async function fastBatch(cap = 150, rounds = 10, seed = 20260804) {
-      const runs = [];
-      const origRandom = Math.random;
-      const makeRng = (value) => {
-        let state = value >>> 0;
-        return () => {
-          state = state * 1664525 + 1013904223 >>> 0;
-          return state / 4294967296;
-        };
-      };
-      try {
-        for (let i = 0; i < rounds; i++) {
-          Math.random = makeRng(seed + i * 2654435761);
-          fastSim = true;
-          newGame();
-          const result = await fastRun(cap);
-          runs.push(result);
-        }
-      } finally {
-        Math.random = origRandom;
-      }
-      const agg = { rounds: runs.length, seed, wins: {}, avgTurns: 0, totals: {} };
-      for (const run of runs) {
-        const winnerTeam = run.result?.text?.match(/^(\S+)\s*组/)?.[1] || Object.entries(run.cityOwners).filter(([t]) => t !== "neutral").sort((a, b) => b[1] - a[1])[0]?.[0] || "未定";
-        agg.wins[winnerTeam] = (agg.wins[winnerTeam] || 0) + 1;
-        agg.avgTurns += run.turn;
-        for (const key of Object.keys(run.totals)) {
-          agg.totals[key] = (agg.totals[key] || 0) + run.totals[key];
-        }
-      }
-      agg.avgTurns = Math.round(agg.avgTurns / Math.max(1, runs.length) * 10) / 10;
-      for (const key of Object.keys(agg.totals)) {
-        agg.totals[key] = Math.round(agg.totals[key] / Math.max(1, runs.length) * 10) / 10;
-      }
-      return { agg, runs };
     }
     function emptyOwnerMap(seed = 0) {
       return Object.fromEntries(game.ownerOrder.map((owner) => [owner, seed]));
@@ -4059,6 +4546,10 @@
       get fastSim() {
         return fastSim;
       },
+      // 只有 debug/fastsim.js 会写它 —— 见那个文件对 fastSim 开关的说明。
+      setFastSim: (value) => {
+        fastSim = value;
+      },
       get canvas() {
         return canvas;
       },
@@ -4089,6 +4580,22 @@
       setDimensions: (w, h) => {
         W = w;
         H = h;
+      },
+      setCellSize: (value) => {
+        S = value;
+      },
+      setGame: (value) => {
+        game = value;
+      },
+      resizeCanvas: (w, h) => {
+        canvas.width = w;
+        canvas.height = h;
+      },
+      // 换局/读档时把视角复位。cam 是对象所以能直接改字段，zoom 得赋值。
+      resetCamera: () => {
+        cam.x = 0;
+        cam.y = 0;
+        zoom = 1;
       },
       listSaves: () => savesApi.listSaves(),
       sideLabel: () => turnApi.sideLabel(),
@@ -4481,314 +4988,34 @@
       draw();
       updatePanels();
     }
-    async function aiTurn(owner) {
-      const profile = game.aiProfiles[owner] || { diff: "medium", agg: "balanced" };
-      clearLandReachCache();
-      if (DIFF[profile.diff]?.scripted) {
-        if (DIFF[profile.diff].script === "naval") {
-          await navalTurn(owner);
-        } else {
-          await bridgeheadTurn(owner);
-        }
-        return;
-      }
-      const intent = buildStrategicIntent(owner, profile);
-      const memory = frontMemory(owner);
-      logAiDecision(owner, summarizeIntent(intent));
-      if (intent.cooledTargets?.length) {
-        incrementStrat(owner, "reroutes");
-        logAiDecision(owner, `暂时避开受阻方向：${intent.cooledTargets.join("、")}。`);
-      }
-      aiManageForces(owner);
-      aiSpendGold(owner, profile);
-      refresh();
-      await pause(aiStepDelay());
-      const units = game.units.filter((entry) => entry.owner === owner).sort((a, b) => unitPriority(b, intent) - unitPriority(a, intent));
-      for (const unitEntry of [...units]) {
-        if (game.over) {
-          break;
-        }
-        if (!game.units.includes(unitEntry)) {
-          continue;
-        }
-        const state = computeUnitState(unitEntry);
-        const startCell = { x: unitEntry.x, y: unitEntry.y };
-        const assaultKey = intent.assaultSite ? `site:${cellKey(intent.assaultSite.x, intent.assaultSite.y)}` : null;
-        const bridgeheadCooldown = assaultKey ? memory[assaultKey]?.cooldown > 0 : false;
-        const bridgeheadBlocked = intent.assaultSite && isBridgeheadSite(intent.assaultSite) && (bridgeheadCooldown || state.rerouteTurns > 0 && state.failedObjectiveKey === assaultKey) && dist(unitEntry, intent.assaultSite) <= 4;
-        if (bridgeheadBlocked && typeMeta(unitEntry.type).domain === "land" && profile.agg !== "reckless") {
-          const retreatCell = bestRetreatCell(owner, unitEntry, intent.assaultSite);
-          if (retreatCell && (retreatCell.x !== unitEntry.x || retreatCell.y !== unitEntry.y)) {
-            incrementStrat(owner, "retreats");
-            logAiDecision(owner, `${typeMeta(unitEntry.type).name}从桥头暂退，在 ${intent.assaultSite.name} 方向重整。`);
-            moveUnit(unitEntry, retreatCell.x, retreatCell.y);
-            finalizeUnitState(unitEntry, state, assaultKey || "idle", true);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-        }
-        if (profile.agg === "cautious" && intent.assaultSite && isBridgeheadSite(intent.assaultSite)) {
-          const currentFrontline = frontlineCount(owner, intent.assaultSite, 3);
-          const isReserveCandidate = typeMeta(unitEntry.type).domain === "land" && unitEntry.type !== "engineer" && (dist(unitEntry, intent.assaultSite) > 4 || typeMeta(unitEntry.type).range >= 2);
-          if (currentFrontline >= 4 && isReserveCandidate && unitEntry.hp > unitEntry.maxHp * 0.65) {
-            incrementStrat(owner, "reserves");
-            logAiDecision(owner, `${typeMeta(unitEntry.type).name}作为桥头预备队待机。`);
-            finalizeUnitState(unitEntry, state, `reserve:${cellKey(intent.assaultSite.x, intent.assaultSite.y)}`, false);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-        }
-        if (unitEntry.type === "transport") {
-          if (!unitEntry.cargo.length && autoLoadAdjacent(unitEntry)) {
-            finalizeUnitState(unitEntry, state, "transport-load", false);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-          if (unitEntry.cargo.length && autoUnloadAdjacent(unitEntry)) {
-            finalizeUnitState(unitEntry, state, "transport-unload", false);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-          const landing = bestLanding(owner, unitEntry);
-          if (landing) {
-            const moved = moveTransportToward(unitEntry, landing);
-            const nearThreat = nearbyEnemies({ x: unitEntry.x, y: unitEntry.y }, owner, 2);
-            const escortAdjacent = game.units.some((entry) => entry.owner === owner && entry.type === "warship" && dist(entry, unitEntry) <= 2);
-            if (unitEntry.cargo.length && (nearThreat === 0 || escortAdjacent)) {
-              autoUnloadAdjacent(unitEntry);
-            }
-            finalizeUnitState(unitEntry, state, `landing:${cellKey(landing.x, landing.y)}`, moved);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-        }
-        if (unitEntry.type === "engineer") {
-          const engineerChoice = engineerBuildChoice(owner, unitEntry, intent);
-          if (engineerChoice?.kind === "camp" && buildCamp(unitEntry)) {
-            finalizeUnitState(unitEntry, state, "camp", false);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-          if (engineerChoice?.cell && engineerLaunch(unitEntry, engineerChoice.kind, engineerChoice.cell, engineerChoice.cargoTypes || [])) {
-            finalizeUnitState(unitEntry, state, `${engineerChoice.kind}:${cellKey(engineerChoice.cell.x, engineerChoice.cell.y)}`, false);
-            refresh();
-            await pause(aiStepDelay());
-            continue;
-          }
-        }
-        const choice = chooseAction(owner, unitEntry, profile, intent);
-        const objectiveSite = choice.target ? null : bestObjective(owner, unitEntry, intent);
-        const objectiveKey = objectiveSite ? `site:${cellKey(objectiveSite.x, objectiveSite.y)}` : choice.target ? `attack:${choice.target.id}` : "idle";
-        if (choice.move && (choice.move.x !== unitEntry.x || choice.move.y !== unitEntry.y)) {
-          moveUnit(unitEntry, choice.move.x, choice.move.y);
-        }
-        if (choice.target && game.units.includes(unitEntry) && game.units.includes(choice.target) && canAttack(unitEntry, choice.target)) {
-          attack(unitEntry, choice.target);
-        }
-        finalizeUnitState(unitEntry, state, objectiveKey, !sameCell(startCell, unitEntry));
-        refresh();
-        await pause(aiStepDelay());
-      }
-      if (!game.over) {
-        advanceTurn();
-      }
-    }
-    function newGame() {
-      const aiCount = Number($("aiSelect").value);
-      const spectator = $("spectatorSelect")?.value === "on";
-      const owners = spectator ? Array.from({ length: aiCount }, (_, index) => `ai${index}`) : ["player", ...Array.from({ length: aiCount }, (_, index) => `ai${index}`)];
-      const teams = { player: $("playerTeamSelect").value };
-      const aiProfiles = {};
-      const ownerColors = { player: COLOR_PRESETS[$("playerColorSelect").value || "azure"]?.value || "#55a3ff" };
-      for (let i = 0; i < aiCount; i++) {
-        teams[`ai${i}`] = $(`ai${i}Team`)?.value || TEAMS[(i + 1) % TEAMS.length];
-        aiProfiles[`ai${i}`] = { diff: $(`ai${i}Diff`)?.value || "medium", agg: $(`ai${i}Agg`)?.value || "balanced" };
-        ownerColors[`ai${i}`] = COLOR_PRESETS[$(`ai${i}Color`)?.value || "crimson"]?.value || OWNER_COLORS[i % OWNER_COLORS.length];
-      }
-      const dimensions = computeDimensions($("sizeSelect").value, $("aspectSelect").value);
-      W = dimensions.w;
-      H = dimensions.h;
-      S = W <= 22 ? 52 : 44;
-      canvas.width = Math.min(W * S, VIEW_MAX_W);
-      canvas.height = Math.min(H * S, VIEW_MAX_H);
-      cam.x = 0;
-      cam.y = 0;
-      zoom = 1;
-      currentSaveKey = null;
-      clearDistFieldCache();
-      game = {
-        terrain: terrainFor($("mapSelect").value, $("complexitySelect").value, W, H),
-        units: [],
-        sites: [],
-        ownerOrder: owners,
-        currentIndex: 0,
-        side: "player",
-        turn: 1,
-        selected: null,
-        over: false,
-        logs: [],
-        teams,
-        ownerColors,
-        aiProfiles,
-        aiFrontMemory: {},
-        freeplay: false,
-        pendingOrder: null,
-        goldByOwner: Object.fromEntries(owners.map((owner) => [owner, 45])),
-        stats: {
-          startTime: null,
-          endTime: null,
-          chartIndex: 0,
-          produced: Object.fromEntries(owners.map((owner) => [owner, 0])),
-          kills: Object.fromEntries(owners.map((owner) => [owner, 0])),
-          losses: Object.fromEntries(owners.map((owner) => [owner, 0])),
-          captures: Object.fromEntries(owners.map((owner) => [owner, 0])),
-          lostSites: Object.fromEntries(owners.map((owner) => [owner, 0])),
-          strat: Object.fromEntries(owners.map((owner) => [owner, { stalls: 0, reserves: 0, reroutes: 0, retreats: 0, cityCaptures: 0, oilCaptures: 0, shipyardCaptures: 0, engineerLandings: 0, transportLaunches: 0, campsBuilt: 0, sells: 0 }])),
-          history: []
-        },
-        settings: {
-          map: $("mapSelect").value,
-          mode: $("modeSelect").value,
-          spectator,
-          ai: aiCount,
-          start: Number($("startUnitsSelect").value),
-          size: $("sizeSelect").value,
-          aspect: $("aspectSelect").value,
-          aiSpeed: Number($("aiSpeed").value),
-          complexity: $("complexitySelect").value,
-          spread: Number($("citySpread").value),
-          deploy: $("deploymentSelect").value,
-          buildCap: Number($("buildCap").value),
-          incomeMult: Number($("incomeMult").value),
-          siteDensity: Number($("siteDensity").value)
-        }
-      };
-      game.sites = makeCities(aiCount, game.settings.size, game.settings.spread);
-      game.sites.push(...makeNavalSites());
-      game.sites.push(...makeSpecialSites());
-      const used = new Set(game.sites.filter((entry) => entry.kind === "city").map((entry) => cellKey(entry.x, entry.y)));
-      for (const owner of owners) {
-        const homes = game.sites.filter((entry) => entry.owner === owner && entry.kind === "city");
-        if (!homes.length) {
-          continue;
-        }
-        const seaSpawn = game.settings.start >= 4 ? spawnSea(owner, game.settings.start >= 6 ? 2 : 1) : 0;
-        spawnLand(owner, homes, Math.max(0, game.settings.start - seaSpawn), used, game.settings.deploy);
-      }
-      $("statsPanel").classList.add("hidden");
-      $("statsSummary").innerHTML = "";
-      recordStatSnapshot("deploy");
-      log(`版本 0.1.2 战局开始：${MAPS[game.settings.map].name} · ${SIZES[game.settings.size].name} · ${ASPECTS[game.settings.aspect].name} ${W}×${H} · ${game.sites.filter((entry) => entry.kind === "city").length} 座城市 · ${game.sites.filter((entry) => entry.kind === "shipyard").length} 座船坞。`, "system");
-      const focusCity = game.sites.find((entry) => entry.kind === "city" && entry.owner === (spectator ? owners[0] : "player"));
-      if (focusCity) {
-        centerCamOn(focusCity.x, focusCity.y);
-      }
-      const startFirstTurn = () => beginTurn(owners[0], true);
-      if (fastSim) {
-        startFirstTurn();
-      } else {
-        runLoadingScreen(owners, startFirstTurn);
-      }
-    }
-    const LOADING_TIPS = [
-      "战术：长枪兵对骑兵有克制加成，把它们摆在骑兵冲锋的正面。",
-      "战术：战船克制运兵船，护航或拦截时优先让战船贴身。",
-      "技巧：运兵船现在最多可搭载 5 个陆军单位，登陆后立即释放。",
-      "技巧：运兵船卸下的单位可在同一格堆叠（每格最多 3 个），点击堆叠格可循环选择操控。",
-      "技巧：大地图下长按右键并拖动鼠标即可平移视野，右下角小地图显示当前视口。",
-      "战术：工程师能在海边直接造舰，也能原地建立可维持 3 回合的临时营地。",
-      "经济：占领油田和军营能显著增强产能，冷酷 AI 会优先争夺它们。",
-      "战术：骑兵满机动接战时获得冲锋加成，保留移动力再发起冲锋。",
-      "技巧：驻军可花金币修整，残血精锐撤回城市回血再战更划算。",
-      "历史：两栖登陆的关键从来不是抢滩，而是能否持续把后续兵力运上岸。",
-      "战术：弩手爆发高但脆弱，用剑士与近卫在前排为其挡刀。",
-      "技巧：单位击杀累积可晋升老兵，提升机动与续航，注意保护高阶单位。",
-      "提示：设置里可调收入倍率与每回合造兵上限，用来打造快节奏或持久战。",
-      "战术：把富余陆军用空运兵船循环转运到敌军薄弱的海岸，是破解岛屿僵局的钥匙。",
-      "历史：制海权决定制陆权——失去海上补给线的滩头阵地终将枯萎。"
-    ];
-    function runLoadingScreen(owners, done) {
-      const screen = $("loadingScreen");
-      if (!screen) {
-        done();
-        return;
-      }
-      drawPreview();
-      $("loadingMapName").textContent = `${MAPS[game.settings.map].name} · 部署中`;
-      $("loadingMapMeta").textContent = `${SIZES[game.settings.size].name} · ${W}×${H} · ${game.sites.filter((e) => e.kind === "city").length} 城 / ${game.sites.filter((e) => e.kind === "shipyard").length} 船坞`;
-      const blockCount = 44;
-      $("loadingBlocks").innerHTML = Array.from({ length: blockCount }, () => '<i class="lblock"></i>').join("");
-      const blocks = [...$("loadingBlocks").querySelectorAll(".lblock")];
-      const sides = owners.map((owner) => ({ owner, target: 70 + Math.random() * 30, value: 0 }));
-      $("loadingSides").innerHTML = sides.map((side) => `<div class="lside"><span class="ldot" style="background:${ownerColor(side.owner)}"></span><span class="lname">${ownerName(side.owner)}</span><span class="lbar"><i data-owner="${side.owner}"></i></span><span class="lpct" data-pct="${side.owner}">0%</span></div>`).join("");
-      let tipIndex = Math.floor(Math.random() * LOADING_TIPS.length);
-      $("loadingTip").textContent = LOADING_TIPS[tipIndex];
-      screen.classList.remove("hidden");
-      let progress = 0;
-      let tipTick = 0;
-      const timer = setInterval(() => {
-        progress = Math.min(100, progress + 2 + Math.random() * 4);
-        const lit = Math.round(blockCount * progress / 100);
-        blocks.forEach((block, index) => block.classList.toggle("on", index < lit));
-        $("loadingPercent").textContent = Math.round(progress);
-        for (const side of sides) {
-          side.value = Math.min(100, side.value + (progress >= side.target ? 6 + Math.random() * 8 : 2 + Math.random() * 5));
-          const bar = $("loadingSides").querySelector(`i[data-owner="${side.owner}"]`);
-          const pct = $("loadingSides").querySelector(`span[data-pct="${side.owner}"]`);
-          if (bar) {
-            bar.style.width = `${side.value}%`;
-          }
-          if (pct) {
-            pct.textContent = `${Math.round(side.value)}%`;
-          }
-        }
-        if (++tipTick % 14 === 0) {
-          tipIndex = (tipIndex + 1) % LOADING_TIPS.length;
-          $("loadingTip").textContent = LOADING_TIPS[tipIndex];
-        }
-        if (progress >= 100 && sides.every((side) => side.value >= 100)) {
-          clearInterval(timer);
-          setTimeout(() => {
-            screen.classList.add("hidden");
-            done();
-          }, 350);
-        }
-      }, 90);
-    }
-    function showScreen(name) {
-      const setupEl = $("setupScreen");
-      const gameEl = $("gameScreen");
-      const infoEl = $("infoScreen");
-      if (setupEl) {
-        setupEl.classList.toggle("hidden", name !== "setup");
-      }
-      if (gameEl) {
-        gameEl.classList.toggle("hidden", name !== "game");
-      }
-      if (infoEl) {
-        infoEl.classList.toggle("hidden", name !== "info");
-      }
-      $("loadScreen")?.classList.toggle("hidden", name !== "load");
-      if (name === "setup") {
-        $("overlay")?.classList.add("hidden");
-        $("loadingScreen")?.classList.add("hidden");
-        renderLobbyPreview();
-      }
-      if (name === "load") {
-        renderSaveList();
-      }
-    }
-    function startGameFlow() {
-      showScreen("game");
-      newGame();
-    }
     savesApi = createSaves(rt);
+    const { aiTurn } = createTurnLoop(rt, {
+      navalTurn,
+      bridgeheadTurn,
+      buildStrategicIntent,
+      summarizeIntent,
+      frontMemory,
+      unitPriority,
+      computeUnitState,
+      finalizeUnitState,
+      bestRetreatCell,
+      bestObjective,
+      chooseAction,
+      aiManageForces,
+      aiSpendGold,
+      autoLoadAdjacent,
+      autoUnloadAdjacent,
+      engineerBuildChoice,
+      isBridgeheadSite,
+      frontlineCount,
+      nearbyEnemies,
+      bestLanding,
+      moveTransportToward,
+      clearLandReachCache,
+      buildCamp,
+      engineerLaunch,
+      sameCell
+    });
     const {
       SAVE_PREFIX: SAVE_PREFIX2,
       listSaves,
@@ -4811,6 +5038,29 @@
       renderSaveList,
       renderRules
     } = createLobby(rt);
+    let screensApi;
+    const { newGame } = createNewGame(rt, {
+      makeCities,
+      makeNavalSites,
+      makeSpecialSites,
+      spawnLand,
+      spawnSea,
+      centerCamOn,
+      clearDistFieldCache,
+      beginTurn,
+      runLoadingScreen: (owners, done) => screensApi.runLoadingScreen(owners, done)
+    });
+    screensApi = createScreens(rt, {
+      newGame,
+      drawPreview,
+      renderLobbyPreview,
+      renderSaveList,
+      centerCamOn,
+      clearDistFieldCache,
+      clearLandReachCache,
+      aiTurn
+    });
+    const { runLoadingScreen, showScreen, startGameFlow, loadPayload } = screensApi;
     const { bindAll } = createBindings(rt, {
       renderAISettings,
       syncSliderLabels,
@@ -4850,79 +5100,13 @@
       deleteSave,
       readSave
     });
-    function loadPayload(payload) {
-      if (!payload?.state) {
-        return false;
-      }
-      W = payload.W;
-      H = payload.H;
-      S = payload.S;
-      canvas.width = Math.min(W * S, VIEW_MAX_W);
-      canvas.height = Math.min(H * S, VIEW_MAX_H);
-      cam.x = 0;
-      cam.y = 0;
-      zoom = 1;
-      clearDistFieldCache();
-      clearLandReachCache();
-      game = payload.state;
-      game.selected = null;
-      game.pendingOrder = null;
-      showScreen("game");
-      const focusOwner = game.settings?.spectator ? game.ownerOrder[0] : "player";
-      const focusCity = game.sites.find((entry) => entry.kind === "city" && entry.owner === focusOwner);
-      if (focusCity) {
-        centerCamOn(focusCity.x, focusCity.y);
-      }
-      const finishLoad = () => {
-        refresh();
-        if (!game.over && game.side !== "player" && !fastSim) {
-          setTimeout(() => {
-            if (!game.over && game.side !== "player") {
-              void aiTurn(game.side);
-            }
-          }, 300);
-        }
-      };
-      if (fastSim) {
-        finishLoad();
-      } else {
-        runLoadProgress(finishLoad);
-      }
-      return true;
-    }
-    function runLoadProgress(done) {
-      const screen = $("loadingScreen");
-      if (!screen) {
-        done();
-        return;
-      }
-      drawPreview();
-      $("loadingMapName").textContent = `读取存档 · ${MAPS[game.settings.map]?.name || "战局"}`;
-      $("loadingMapMeta").textContent = `第 ${game.turn} 回合 · ${SIZES[game.settings.size]?.name || `${W}×${H}`}`;
-      $("loadingSides").innerHTML = "";
-      $("loadingTip").textContent = LOADING_TIPS[Math.floor(Math.random() * LOADING_TIPS.length)];
-      const blockCount = 44;
-      $("loadingBlocks").innerHTML = Array.from({ length: blockCount }, () => '<i class="lblock"></i>').join("");
-      const blocks = [...$("loadingBlocks").querySelectorAll(".lblock")];
-      screen.classList.remove("hidden");
-      const started = performance.now();
-      const minMs = 1e3;
-      let progress = 0;
-      const timer = setInterval(() => {
-        const elapsed = performance.now() - started;
-        progress = Math.min(100, Math.max(progress + 3 + Math.random() * 6, elapsed / minMs * 100));
-        const lit = Math.round(blockCount * progress / 100);
-        blocks.forEach((block, index) => block.classList.toggle("on", index < lit));
-        $("loadingPercent").textContent = Math.round(progress);
-        if (progress >= 100 && elapsed >= minMs) {
-          clearInterval(timer);
-          setTimeout(() => {
-            screen.classList.add("hidden");
-            done();
-          }, 200);
-        }
-      }, 60);
-    }
+    const { debugSummary, debugRunResult, fastRun, fastBatch } = createFastSim(rt, {
+      advanceTurn,
+      aiTurn,
+      newGame,
+      ownerExists,
+      macroYield
+    });
     function setup() {
       fillSelectOptions();
       syncSliderLabels();
