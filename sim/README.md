@@ -35,6 +35,11 @@
 | 棋盘点击 | `src/ui/input.js` | 命中数 | 2（实测 2~3） |
 | 大厅预览 | `src/ui/lobby.js` | ctx 调用数 | 100（实测 900+） |
 
+外加一项不分用例的**事件绑定检查**：`src/ui/bindings.js` 里漏掉一行
+`addEventListener` 不会报任何错，那个按钮只是永远点不动。harness 的元素打桩会
+记下每个元素被挂了哪些事件（含 `onclick` 赋值），烟雾测试拿 `MUST_BE_BOUND`
+清单逐个核对。**加新按钮时记得把 id 加进那份清单** —— 它是绑定层唯一的保护。
+
 大厅还有一部分是在 **`createHarness()` 那一行**就跑完的：它触发
 `DOMContentLoaded` → `setup()` → `showScreen('setup')` → `renderLobbyPreview()`，
 所以 `fillSelectOptions` / `renderRules` / `renderCodex` / `renderAISettings`
@@ -72,14 +77,17 @@
 
 **五层的阳性对照都实跑验证过**：改错属性名 → 红、改错函数名 → 红、
 让 `updatePanels` 提前 return → 红、把格子换算的除数改成 `S * 2` → 红、
-把移动分支短路掉 → 红、大厅文案里的 `.name` 改成 `.nam` → 红。
+把移动分支短路掉 → 红、大厅文案里的 `.name` 改成 `.nam` → 红、
+删掉两行按钮绑定 → 红。
 
 ### 它测不到什么
 
 别把它当成完整的 UI 测试。已知的边界：
 
-- **`setup()` 里的事件绑定完全没覆盖**（键盘、拖拽、滚轮缩放）。摄像机交互
-  （`zoomAt` / `panBy` / `beginPan` / `endPan`）一行没跑。
+- **绑定只验"挂上了"，不验"挂对了"**。点了会发生什么、参数传得对不对、
+  toast 文案合不合适，一概没测。
+- **键盘和拖拽绑在 `document` / `window` 上**，不走元素打桩，连"挂上了"都没验。
+  摄像机交互（`zoomAt` / `panBy` / `beginPan` / `endPan`）一行没跑。
 - **onBoard 只覆盖了"选中"和"移动"两条分支**。装载、卸载、攻击、工程师下水
   都没测到。
 - **大厅的 change 事件重渲染没覆盖**：`renderLobbyPreview` 只在初始化时跑到一次，

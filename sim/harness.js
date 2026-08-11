@@ -133,7 +133,14 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
       classList: { add() {}, remove() {}, toggle() { return false; }, contains() { return false; } },
       style: {}, dataset: {},
       getContext: () => ctxStub,
-      addEventListener() {}, removeEventListener() {},
+      // 记下这个元素被挂了哪些事件，供 boundElements() 检查绑定层有没有漏。
+      // 只记类型和次数，不真的存回调 —— 无头环境里没人会触发它们。
+      _handlers: {},
+      addEventListener(type) { this._handlers[type] = (this._handlers[type] || 0) + 1; },
+      removeEventListener() {},
+      _onclick: null,
+      get onclick() { return this._onclick; },
+      set onclick(fn) { this._onclick = fn; if (fn) { this._handlers.onclick = 1; } },
       appendChild() {}, removeChild() {}, insertAdjacentHTML() {},
       setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
       closest() { return null; }, querySelector() { return null; }, querySelectorAll() { return []; },
@@ -143,7 +150,7 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
       // 只有 input.js 用这个方法，改它不影响其它工具。
       getBoundingClientRect() { return { left: 0, top: 0, width: this.width || 0, height: this.height || 0 }; },
       focus() {}, click() {}, remove() {},
-      onclick: null, onchange: null, oninput: null
+      onchange: null, oninput: null
     };
     elCache.set(id, el);
     return el;
@@ -192,6 +199,10 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
     // 同理，用来区分「面板刷了且没问题」和「面板压根没刷」。
     domWrites: () => domStats.writes,
     resetDomWrites: () => { domStats.writes = 0; },
+    // 每个元素上挂了哪些事件（含 onclick 赋值）。src/ui/bindings.js 里漏掉一行
+    // addEventListener 是不会报错的 —— 只是那个按钮永远点不动，而无头环境里
+    // 谁也不会去点它。这个入口让烟雾测试能直接断言"该绑的都绑上了"。
+    handlersFor: id => ({ ...(elCache.get(id)?._handlers || {}) }),
     // Apply a full config for the next scenario (values persist via elFor cache).
     setConfig(next) {
       for (const [id, val] of Object.entries(next)) {

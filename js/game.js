@@ -3235,6 +3235,457 @@
     };
   }
 
+  // src/ui/bindings.js
+  function createBindings(rt, deps) {
+    const $ = (id) => document.getElementById(id);
+    const {
+      // 大厅
+      renderAISettings,
+      syncSliderLabels,
+      renderSaveList,
+      renderLobbyPreview,
+      showScreen,
+      startGameFlow,
+      // 面板
+      uiState,
+      setCargoPreset,
+      engineerSelected,
+      // 棋盘交互
+      onBoard,
+      beginPan,
+      panBy,
+      endPan,
+      zoomAt,
+      consumeContextSuppression,
+      endTurn,
+      selectRef,
+      draw,
+      // 统计
+      chartMetrics,
+      drawStatsChart,
+      // 生产与据点
+      buildAtSite,
+      buildBudgetLeft,
+      sellUnit,
+      upgradeSite,
+      fullHealSite,
+      buildCamp,
+      autoLoadAdjacent,
+      autoUnloadAdjacent,
+      endGameNeutral,
+      // 存档
+      buildSavePayload,
+      saveAsNewSave,
+      overwriteCurrentSave,
+      importSaveToList,
+      currentSaveName,
+      loadSave,
+      deleteSave,
+      readSave
+    } = deps;
+    let selectedSaveKey = null;
+    function bindLobby() {
+      $("aiSelect").addEventListener("change", renderAISettings);
+      for (const id of ["citySpread", "aiSpeed", "buildCap"]) {
+        $(id).addEventListener("input", syncSliderLabels);
+      }
+      for (const id of ["mapSelect", "sizeSelect", "aspectSelect", "complexitySelect", "aiSelect"]) {
+        $(id)?.addEventListener("change", renderLobbyPreview);
+      }
+      $("btnStartGame").onclick = startGameFlow;
+      $("btnNewGame").onclick = () => showScreen("setup");
+      $("btnHelp").onclick = () => $("helpModal").classList.remove("hidden");
+      $("btnHelpLobby").onclick = () => $("helpModal").classList.remove("hidden");
+      $("btnHelpClose").onclick = () => $("helpModal").classList.add("hidden");
+      $("btnInfoPage").onclick = () => showScreen("info");
+      $("btnInfoClose").onclick = () => showScreen("setup");
+    }
+    function bindPanels() {
+      $("buildGrid").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-type]");
+        const siteEntry = rt.selectedSite();
+        if (!button || !siteEntry) {
+          return;
+        }
+        const cargoTypes = button.dataset.type === "transport" ? normalizeCargoTypes(uiState.shipyardCargo) : [];
+        if (!buildAtSite("player", siteEntry, button.dataset.type, { cargoTypes })) {
+          rt.toast(buildBudgetLeft("player") <= 0 ? "本回合造兵已达上限。" : "无法在该据点生产该单位。");
+        }
+        rt.refresh();
+      });
+      $("buildBody").addEventListener("change", (event) => {
+        const input = event.target.closest("[data-cargo-preset]");
+        if (!input) {
+          return;
+        }
+        setCargoPreset(input.dataset.cargoPreset, Number(input.dataset.cargoSlot), input.value);
+        rt.refresh();
+      });
+      $("selActions").addEventListener("click", (event) => {
+        const pick = event.target.closest("[data-select-unit]");
+        if (pick) {
+          const chosen = rt.game?.units.find((entry) => entry.id === pick.dataset.selectUnit);
+          if (chosen) {
+            selectRef("unit", chosen);
+            rt.refresh();
+          }
+          return;
+        }
+        const button = event.target.closest("[data-unit-action]");
+        if (!button || !rt.game?.selected || rt.game.selected.kind !== "unit") {
+          return;
+        }
+        const unitEntry = rt.game.selected.ref;
+        if (button.dataset.unitAction === "load" && !autoLoadAdjacent(unitEntry)) {
+          rt.toast("附近没有可装载的己方陆军。");
+        }
+        if (button.dataset.unitAction === "unload" && !autoUnloadAdjacent(unitEntry)) {
+          rt.toast("附近没有可登陆的空地。");
+        }
+        if (button.dataset.unitAction === "sell" && !sellUnit("player", unitEntry)) {
+          rt.toast("当前无法变卖该单位。");
+        }
+        rt.refresh();
+      });
+      $("engineerCard").addEventListener("change", (event) => {
+        const input = event.target.closest("[data-cargo-preset]");
+        if (!input) {
+          return;
+        }
+        setCargoPreset(input.dataset.cargoPreset, Number(input.dataset.cargoSlot), input.value);
+        rt.refresh();
+      });
+      $("engineerCard").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-engineer-build]");
+        const engineer = engineerSelected();
+        if (!button || !engineer || rt.game.side !== "player") {
+          return;
+        }
+        if (button.dataset.engineerBuild === "camp") {
+          if (!buildCamp(engineer)) {
+            rt.toast("当前无法建立临时营地。");
+          }
+          rt.refresh();
+          return;
+        }
+        rt.game.pendingOrder = {
+          kind: "engineer-launch",
+          builderId: engineer.id,
+          product: button.dataset.engineerBuild,
+          cargoTypes: button.dataset.engineerBuild === "transport" ? normalizeCargoTypes(uiState.engineerCargo) : []
+        };
+        rt.refresh();
+      });
+      $("btnUpgrade").onclick = () => {
+        const siteEntry = rt.selectedSite();
+        if (!siteEntry || !upgradeSite("player", siteEntry)) {
+          rt.toast("无法升级该据点。");
+        }
+        rt.refresh();
+      };
+      $("btnFullHeal").onclick = () => {
+        const siteEntry = rt.selectedSite();
+        if (!siteEntry || !fullHealSite("player", siteEntry)) {
+          rt.toast("当前条件下无法修整驻军。");
+        }
+        rt.refresh();
+      };
+      $("btnEndTurn").onclick = endTurn;
+    }
+    function bindBoard() {
+      const canvas = rt.canvas;
+      canvas.addEventListener("click", onBoard);
+      canvas.addEventListener("mousedown", beginPan);
+      canvas.addEventListener("wheel", (event) => {
+        if (!rt.game || rt.game.over) {
+          return;
+        }
+        event.preventDefault();
+        zoomAt(event);
+        draw();
+      }, { passive: false });
+      window.addEventListener("mousemove", (event) => {
+        if (panBy(event)) {
+          draw();
+        }
+      });
+      window.addEventListener("mouseup", endPan);
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        if (consumeContextSuppression()) {
+          return;
+        }
+        rt.clearPendingOrder();
+        rt.game.selected = null;
+        rt.refresh();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.code === "Space") {
+          event.preventDefault();
+          endTurn();
+        }
+        if (event.key === "n" || event.key === "N") {
+          showScreen("setup");
+        }
+        if (event.key === "Escape" && rt.game) {
+          rt.game.selected = null;
+          rt.refresh();
+        }
+      });
+    }
+    function bindModals() {
+      $("btnPause").onclick = () => {
+        if (rt.game && !rt.game.over) {
+          $("pauseModal").classList.remove("hidden");
+        }
+      };
+      $("btnResume").onclick = () => $("pauseModal").classList.add("hidden");
+      $("btnEndGame").onclick = () => endGameNeutral();
+      $("btnModalContinue").onclick = () => {
+        const game = rt.game;
+        game.over = false;
+        game.freeplay = true;
+        game.side = "player";
+        for (const unitEntry of game.units.filter((entry) => rt.areAllies(entry.owner, "player"))) {
+          unitEntry.maxMove = effectiveMove(unitEntry);
+          unitEntry.move = unitEntry.maxMove;
+          unitEntry.acted = false;
+          unitEntry.hasAttacked = false;
+        }
+        $("overlay").classList.add("hidden");
+        rt.refresh();
+      };
+      $("btnModalOk").onclick = () => {
+        $("overlay").classList.add("hidden");
+        showScreen("setup");
+      };
+      $("btnChartPrev").onclick = () => {
+        if (!rt.game?.stats) {
+          return;
+        }
+        rt.game.stats.chartIndex = (rt.game.stats.chartIndex + chartMetrics().length - 1) % chartMetrics().length;
+        drawStatsChart();
+      };
+      $("btnChartNext").onclick = () => {
+        if (!rt.game?.stats) {
+          return;
+        }
+        rt.game.stats.chartIndex = (rt.game.stats.chartIndex + 1) % chartMetrics().length;
+        drawStatsChart();
+      };
+    }
+    function bindSaves() {
+      $("btnSaveGame").onclick = () => {
+        $("pauseModal").classList.add("hidden");
+        const hasCurrent = !!rt.currentSaveKey;
+        $("btnSaveOverwrite").classList.toggle("hidden", !hasCurrent);
+        $("saveNameInput").value = hasCurrent ? currentSaveName() : `${MAPS[rt.game.settings.map]?.name || "战局"} · 第 ${rt.game.turn} 回合`;
+        $("saveModal").classList.remove("hidden");
+        $("saveNameInput").focus();
+      };
+      $("btnSaveOverwrite").onclick = () => {
+        rt.toast(overwriteCurrentSave($("saveNameInput").value.trim()) ? "已覆盖当前存档。" : "覆盖失败。");
+        $("saveModal").classList.add("hidden");
+      };
+      $("btnSaveConfirm").onclick = () => {
+        rt.toast(saveAsNewSave($("saveNameInput").value.trim()) ? "已另存为新存档。" : "保存失败，存储空间可能已满。");
+        $("saveModal").classList.add("hidden");
+      };
+      $("btnSaveExport").onclick = () => {
+        downloadSaveFile(buildSavePayload($("saveNameInput").value.trim()));
+        $("saveModal").classList.add("hidden");
+        rt.toast("已导出存档文件，可放入游戏的 saves 文件夹长期保存。");
+      };
+      $("btnSaveCancel").onclick = () => $("saveModal").classList.add("hidden");
+      $("btnLoadPage").onclick = () => {
+        selectedSaveKey = null;
+        showScreen("load");
+      };
+      $("btnLoadBack").onclick = () => showScreen("setup");
+      $("saveListBody").addEventListener("click", (event) => {
+        const row = event.target.closest(".save-row");
+        if (!row) {
+          return;
+        }
+        selectedSaveKey = row.dataset.key;
+        [...$("saveListBody").querySelectorAll(".save-row")].forEach((el) => el.classList.toggle("selected", el === row));
+      });
+      $("btnLoadConfirm").onclick = () => {
+        if (!selectedSaveKey) {
+          rt.toast("请先选择一个存档。");
+          return;
+        }
+        if (!loadSave(selectedSaveKey)) {
+          rt.toast("该存档已损坏，无法读取。");
+        }
+      };
+      $("btnLoadDelete").onclick = () => {
+        if (!selectedSaveKey) {
+          rt.toast("请先选择一个存档。");
+          return;
+        }
+        deleteSave(selectedSaveKey);
+        selectedSaveKey = null;
+        renderSaveList();
+        rt.toast("已删除该存档。");
+      };
+      $("btnExportSave").onclick = () => {
+        if (!selectedSaveKey) {
+          rt.toast("请先选择一个存档再导出。");
+          return;
+        }
+        try {
+          const payload = readSave(selectedSaveKey);
+          if (!payload) {
+            throw new Error("存档内容无法解析");
+          }
+          downloadSaveFile(payload);
+          rt.toast("已导出存档文件，可放入游戏的 saves 文件夹长期保存。");
+        } catch (err) {
+          rt.toast("导出失败：该存档已损坏。");
+        }
+      };
+      $("btnImportSave").onclick = () => $("importFile").click();
+      $("importFile").addEventListener("change", (event) => {
+        const file = event.target.files?.[0];
+        if (!file) {
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            if (importSaveToList(JSON.parse(reader.result))) {
+              renderSaveList();
+              rt.toast("已导入存档并加入列表，点击它即可继续。");
+            } else {
+              rt.toast("导入失败：文件格式不正确。");
+            }
+          } catch (err) {
+            rt.toast("导入失败：文件无法解析。");
+          }
+        };
+        reader.readAsText(file);
+        event.target.value = "";
+      });
+    }
+    function bindAll() {
+      bindLobby();
+      bindPanels();
+      bindBoard();
+      bindModals();
+      bindSaves();
+    }
+    return { bindAll, bindLobby, bindPanels, bindBoard, bindModals, bindSaves };
+  }
+
+  // src/debug/hooks.js
+  function createDebugHooks(rt, deps) {
+    const {
+      debugSummary,
+      fastRun,
+      fastBatch,
+      newGame,
+      resolveStalemate,
+      draw,
+      refresh,
+      renderStatsSummary,
+      drawStatsChart,
+      drawPreview,
+      renderSaveList,
+      renderLobbyPreview,
+      onBoard
+    } = deps;
+    function redraw() {
+      if (!rt.game) {
+        return false;
+      }
+      draw();
+      return true;
+    }
+    function repaintUi() {
+      const game = rt.game;
+      if (!game) {
+        return false;
+      }
+      const prevSelected = game.selected;
+      const pickUnit = (predicate) => game.units.find(predicate) || null;
+      const refs = [
+        { kind: "unit", ref: pickUnit((entry) => entry.owner === "player") || game.units[0] || null },
+        { kind: "unit", ref: pickUnit((entry) => entry.type === "engineer") },
+        { kind: "unit", ref: pickUnit((entry) => typeMeta(entry.type).transport) },
+        { kind: "site", ref: game.sites[0] || null },
+        { kind: "site", ref: game.sites.find((entry) => entry.kind === "shipyard") || null },
+        { kind: null, ref: null }
+      ];
+      for (const item of refs) {
+        game.selected = item.ref ? {
+          kind: item.kind,
+          ref: item.ref,
+          unit: item.kind === "unit" ? item.ref : rt.getUnit(item.ref.x, item.ref.y),
+          site: item.kind === "site" ? item.ref : rt.getSite(item.ref.x, item.ref.y)
+        } : null;
+        refresh();
+      }
+      game.selected = prevSelected;
+      refresh();
+      return true;
+    }
+    function repaintStats() {
+      if (!rt.game) {
+        return false;
+      }
+      renderStatsSummary(false);
+      drawStatsChart();
+      return true;
+    }
+    function repaintLobby() {
+      if (!rt.game) {
+        return false;
+      }
+      drawPreview();
+      renderSaveList();
+      renderLobbyPreview();
+      return true;
+    }
+    function clickCell(x, y) {
+      const game = rt.game;
+      if (!game) {
+        return null;
+      }
+      const canvas = rt.canvas;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = rect.width ? canvas.width / rect.width : 1;
+      const scaleY = rect.height ? canvas.height / rect.height : 1;
+      const px = ((x + 0.5) * rt.S - rt.cam.x) * rt.zoom;
+      const py = ((y + 0.5) * rt.S - rt.cam.y) * rt.zoom;
+      onBoard({ clientX: rect.left + px / scaleX, clientY: rect.top + py / scaleY });
+      return {
+        kind: game.selected?.kind || null,
+        id: game.selected?.ref?.id || null,
+        x: game.selected?.ref?.x ?? null,
+        y: game.selected?.ref?.y ?? null
+      };
+    }
+    return {
+      summary: () => debugSummary(),
+      run: (cap = 150) => fastRun(cap),
+      batch: (cap = 150, rounds = 10, seed = 20260804) => fastBatch(cap, rounds, seed),
+      // 强行判定当前对局，用来在跑飞了的时候拿到一个结果而不是死等。
+      stop: () => {
+        if (rt.game && !rt.game.over) {
+          resolveStalemate();
+        }
+        return debugSummary();
+      },
+      newGame: () => newGame(),
+      redraw,
+      repaintUi,
+      repaintStats,
+      repaintLobby,
+      clickCell
+    };
+  }
+
   // src/main.js
   (() => {
     "use strict";
@@ -4360,6 +4811,45 @@
       renderSaveList,
       renderRules
     } = createLobby(rt);
+    const { bindAll } = createBindings(rt, {
+      renderAISettings,
+      syncSliderLabels,
+      renderSaveList,
+      renderLobbyPreview,
+      showScreen,
+      startGameFlow,
+      uiState,
+      setCargoPreset,
+      engineerSelected,
+      onBoard,
+      beginPan,
+      panBy,
+      endPan,
+      zoomAt,
+      consumeContextSuppression,
+      endTurn,
+      selectRef,
+      draw,
+      chartMetrics,
+      drawStatsChart,
+      buildAtSite,
+      buildBudgetLeft,
+      sellUnit,
+      upgradeSite,
+      fullHealSite,
+      buildCamp,
+      autoLoadAdjacent,
+      autoUnloadAdjacent,
+      endGameNeutral,
+      buildSavePayload,
+      saveAsNewSave,
+      overwriteCurrentSave,
+      importSaveToList,
+      currentSaveName,
+      loadSave,
+      deleteSave,
+      readSave
+    });
     function loadPayload(payload) {
       if (!payload?.state) {
         return false;
@@ -4439,389 +4929,22 @@
       renderRules();
       renderCodex();
       renderAISettings();
-      $("aiSelect").addEventListener("change", renderAISettings);
-      for (const id of ["citySpread", "aiSpeed", "buildCap"]) {
-        $(id).addEventListener("input", syncSliderLabels);
-      }
-      $("buildGrid").addEventListener("click", (event) => {
-        const button = event.target.closest("[data-type]");
-        const siteEntry = selectedSite();
-        if (!button || !siteEntry) {
-          return;
-        }
-        const cargoTypes = button.dataset.type === "transport" ? normalizeCargoTypes(uiState.shipyardCargo) : [];
-        if (!buildAtSite("player", siteEntry, button.dataset.type, { cargoTypes })) {
-          toast(buildBudgetLeft("player") <= 0 ? "本回合造兵已达上限。" : "无法在该据点生产该单位。");
-        }
-        refresh();
+      bindAll();
+      window.__frontierDebug = createDebugHooks(rt, {
+        debugSummary,
+        fastRun,
+        fastBatch,
+        newGame,
+        resolveStalemate,
+        draw,
+        refresh,
+        renderStatsSummary,
+        drawStatsChart,
+        drawPreview,
+        renderSaveList,
+        renderLobbyPreview,
+        onBoard
       });
-      $("buildBody").addEventListener("change", (event) => {
-        const input = event.target.closest("[data-cargo-preset]");
-        if (!input) {
-          return;
-        }
-        setCargoPreset(input.dataset.cargoPreset, Number(input.dataset.cargoSlot), input.value);
-        refresh();
-      });
-      $("selActions").addEventListener("click", (event) => {
-        const pick = event.target.closest("[data-select-unit]");
-        if (pick) {
-          const chosen = game?.units.find((entry) => entry.id === pick.dataset.selectUnit);
-          if (chosen) {
-            selectRef("unit", chosen);
-            refresh();
-          }
-          return;
-        }
-        const button = event.target.closest("[data-unit-action]");
-        if (!button || !game?.selected || game.selected.kind !== "unit") {
-          return;
-        }
-        const unitEntry = game.selected.ref;
-        if (button.dataset.unitAction === "load" && !autoLoadAdjacent(unitEntry)) {
-          toast("附近没有可装载的己方陆军。");
-        }
-        if (button.dataset.unitAction === "unload" && !autoUnloadAdjacent(unitEntry)) {
-          toast("附近没有可登陆的空地。");
-        }
-        if (button.dataset.unitAction === "sell" && !sellUnit("player", unitEntry)) {
-          toast("当前无法变卖该单位。");
-        }
-        refresh();
-      });
-      $("engineerCard").addEventListener("change", (event) => {
-        const input = event.target.closest("[data-cargo-preset]");
-        if (!input) {
-          return;
-        }
-        setCargoPreset(input.dataset.cargoPreset, Number(input.dataset.cargoSlot), input.value);
-        refresh();
-      });
-      $("engineerCard").addEventListener("click", (event) => {
-        const button = event.target.closest("[data-engineer-build]");
-        const engineer = engineerSelected();
-        if (!button || !engineer || game.side !== "player") {
-          return;
-        }
-        if (button.dataset.engineerBuild === "camp") {
-          if (!buildCamp(engineer)) {
-            toast("当前无法建立临时营地。");
-          }
-          refresh();
-          return;
-        }
-        game.pendingOrder = {
-          kind: "engineer-launch",
-          builderId: engineer.id,
-          product: button.dataset.engineerBuild,
-          cargoTypes: button.dataset.engineerBuild === "transport" ? normalizeCargoTypes(uiState.engineerCargo) : []
-        };
-        refresh();
-      });
-      canvas.addEventListener("click", onBoard);
-      canvas.addEventListener("mousedown", beginPan);
-      canvas.addEventListener("wheel", (event) => {
-        if (!game || game.over) {
-          return;
-        }
-        event.preventDefault();
-        zoomAt(event);
-        draw();
-      }, { passive: false });
-      window.addEventListener("mousemove", (event) => {
-        if (panBy(event)) {
-          draw();
-        }
-      });
-      window.addEventListener("mouseup", endPan);
-      canvas.addEventListener("contextmenu", (event) => {
-        event.preventDefault();
-        if (consumeContextSuppression()) {
-          return;
-        }
-        clearPendingOrder();
-        game.selected = null;
-        refresh();
-      });
-      $("btnEndTurn").onclick = endTurn;
-      $("btnNewGame").onclick = () => showScreen("setup");
-      $("btnStartGame").onclick = startGameFlow;
-      $("btnUpgrade").onclick = () => {
-        const siteEntry = selectedSite();
-        if (!siteEntry || !upgradeSite("player", siteEntry)) {
-          toast("无法升级该据点。");
-        }
-        refresh();
-      };
-      $("btnFullHeal").onclick = () => {
-        const siteEntry = selectedSite();
-        if (!siteEntry || !fullHealSite("player", siteEntry)) {
-          toast("当前条件下无法修整驻军。");
-        }
-        refresh();
-      };
-      $("btnModalContinue").onclick = () => {
-        game.over = false;
-        game.freeplay = true;
-        game.side = "player";
-        for (const unitEntry of game.units.filter((entry) => areAllies(entry.owner, "player"))) {
-          unitEntry.maxMove = effectiveMove(unitEntry);
-          unitEntry.move = unitEntry.maxMove;
-          unitEntry.acted = false;
-          unitEntry.hasAttacked = false;
-        }
-        $("overlay").classList.add("hidden");
-        refresh();
-      };
-      $("btnModalOk").onclick = () => {
-        $("overlay").classList.add("hidden");
-        showScreen("setup");
-      };
-      $("btnHelp").onclick = () => $("helpModal").classList.remove("hidden");
-      $("btnHelpLobby").onclick = () => $("helpModal").classList.remove("hidden");
-      $("btnHelpClose").onclick = () => $("helpModal").classList.add("hidden");
-      $("btnInfoPage").onclick = () => showScreen("info");
-      $("btnInfoClose").onclick = () => showScreen("setup");
-      $("btnPause").onclick = () => {
-        if (game && !game.over) {
-          $("pauseModal").classList.remove("hidden");
-        }
-      };
-      $("btnResume").onclick = () => $("pauseModal").classList.add("hidden");
-      $("btnEndGame").onclick = () => endGameNeutral();
-      $("btnSaveGame").onclick = () => {
-        $("pauseModal").classList.add("hidden");
-        const hasCurrent = !!currentSaveKey;
-        $("btnSaveOverwrite").classList.toggle("hidden", !hasCurrent);
-        $("saveNameInput").value = hasCurrent ? currentSaveName() : `${MAPS[game.settings.map]?.name || "战局"} · 第 ${game.turn} 回合`;
-        $("saveModal").classList.remove("hidden");
-        $("saveNameInput").focus();
-      };
-      $("btnSaveOverwrite").onclick = () => {
-        toast(overwriteCurrentSave($("saveNameInput").value.trim()) ? "已覆盖当前存档。" : "覆盖失败。");
-        $("saveModal").classList.add("hidden");
-      };
-      $("btnSaveConfirm").onclick = () => {
-        toast(saveAsNewSave($("saveNameInput").value.trim()) ? "已另存为新存档。" : "保存失败，存储空间可能已满。");
-        $("saveModal").classList.add("hidden");
-      };
-      $("btnSaveExport").onclick = () => {
-        downloadSaveFile(buildSavePayload($("saveNameInput").value.trim()));
-        $("saveModal").classList.add("hidden");
-        toast("已导出存档文件，可放入游戏的 saves 文件夹长期保存。");
-      };
-      $("btnSaveCancel").onclick = () => $("saveModal").classList.add("hidden");
-      $("btnLoadPage").onclick = () => {
-        selectedSaveKey = null;
-        showScreen("load");
-      };
-      $("btnLoadBack").onclick = () => showScreen("setup");
-      $("saveListBody").addEventListener("click", (event) => {
-        const row = event.target.closest(".save-row");
-        if (!row) {
-          return;
-        }
-        selectedSaveKey = row.dataset.key;
-        [...$("saveListBody").querySelectorAll(".save-row")].forEach((el) => el.classList.toggle("selected", el === row));
-      });
-      $("btnLoadConfirm").onclick = () => {
-        if (!selectedSaveKey) {
-          toast("请先选择一个存档。");
-          return;
-        }
-        if (!loadSave(selectedSaveKey)) {
-          toast("该存档已损坏，无法读取。");
-        }
-      };
-      $("btnLoadDelete").onclick = () => {
-        if (!selectedSaveKey) {
-          toast("请先选择一个存档。");
-          return;
-        }
-        deleteSave(selectedSaveKey);
-        selectedSaveKey = null;
-        renderSaveList();
-        toast("已删除该存档。");
-      };
-      $("btnExportSave").onclick = () => {
-        if (!selectedSaveKey) {
-          toast("请先选择一个存档再导出。");
-          return;
-        }
-        try {
-          const payload = readSave(selectedSaveKey);
-          if (!payload) {
-            throw new Error("存档内容无法解析");
-          }
-          downloadSaveFile(payload);
-          toast("已导出存档文件，可放入游戏的 saves 文件夹长期保存。");
-        } catch (err) {
-          toast("导出失败：该存档已损坏。");
-        }
-      };
-      $("btnImportSave").onclick = () => $("importFile").click();
-      $("importFile").addEventListener("change", (event) => {
-        const file = event.target.files?.[0];
-        if (!file) {
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = () => {
-          try {
-            if (importSaveToList(JSON.parse(reader.result))) {
-              renderSaveList();
-              toast("已导入存档并加入列表，点击它即可继续。");
-            } else {
-              toast("导入失败：文件格式不正确。");
-            }
-          } catch (err) {
-            toast("导入失败：文件无法解析。");
-          }
-        };
-        reader.readAsText(file);
-        event.target.value = "";
-      });
-      $("btnChartPrev").onclick = () => {
-        if (!game?.stats) {
-          return;
-        }
-        game.stats.chartIndex = (game.stats.chartIndex + chartMetrics().length - 1) % chartMetrics().length;
-        drawStatsChart();
-      };
-      $("btnChartNext").onclick = () => {
-        if (!game?.stats) {
-          return;
-        }
-        game.stats.chartIndex = (game.stats.chartIndex + 1) % chartMetrics().length;
-        drawStatsChart();
-      };
-      window.__frontierDebug = {
-        summary: () => debugSummary(),
-        run: (cap = 150) => fastRun(cap),
-        batch: (cap = 150, rounds = 10, seed = 20260804) => fastBatch(cap, rounds, seed),
-        stop: () => {
-          if (game && !game.over) {
-            resolveStalemate();
-          }
-          return debugSummary();
-        },
-        newGame: () => newGame(),
-        // 给 sim/smoke-render.js 用：强制同步走一遍完整绘制。
-        // 正常流程里 draw() 只由 refresh() 触发，而 refresh() 在 fastSim 下直接
-        // 返回、非 fastSim 下又要等 runLoadingScreen 的 setInterval 跑完才轮到 ——
-        // 两条路都没法在测试里同步命中渲染层。
-        redraw: () => {
-          if (!game) {
-            return false;
-          }
-          draw();
-          return true;
-        },
-        // 同上，但覆盖面板层（src/ui/panels.js）。
-        //
-        // 面板的分支几乎全挂在「当前选中的是什么」上：没选中 / 选中普通单位 /
-        // 选中工程师 / 选中运兵船 / 选中据点 / 选中船厂，各走一段不同的代码。
-        // 只刷一次默认状态（没选中）等于只覆盖了其中一段，剩下的照样是盲区。
-        // 所以这里逐个换选中态各刷一遍，最后清空还原。
-        //
-        // 直接写 game.selected 而不是走 selectRef()：selectRef 会顺手清掉
-        // pendingOrder，属于操作语义；这里只想触发重绘，不想改游戏状态。
-        repaintUi: () => {
-          if (!game) {
-            return false;
-          }
-          const prevSelected = game.selected;
-          const pickUnit = (predicate) => game.units.find(predicate) || null;
-          const refs = [
-            { kind: "unit", ref: pickUnit((entry) => entry.owner === "player") || game.units[0] || null },
-            { kind: "unit", ref: pickUnit((entry) => entry.type === "engineer") },
-            { kind: "unit", ref: pickUnit((entry) => typeMeta(entry.type).transport) },
-            { kind: "site", ref: game.sites[0] || null },
-            { kind: "site", ref: game.sites.find((entry) => entry.kind === "shipyard") || null },
-            { kind: null, ref: null }
-          ];
-          for (const item of refs) {
-            game.selected = item.ref ? {
-              kind: item.kind,
-              ref: item.ref,
-              unit: item.kind === "unit" ? item.ref : getUnit(item.ref.x, item.ref.y),
-              site: item.kind === "site" ? item.ref : getSite(item.ref.x, item.ref.y)
-            } : null;
-            refresh();
-          }
-          game.selected = prevSelected;
-          refresh();
-          return true;
-        },
-        // 统计面板也在 fastSim 短路之后，同样需要一个同步入口。
-        repaintStats: () => {
-          if (!game) {
-            return false;
-          }
-          renderStatsSummary(false);
-          drawStatsChart();
-          return true;
-        },
-        // 大厅那几个渲染函数里，只有 fillSelectOptions / renderRules / renderCodex /
-        // renderAISettings 会在 setup() 里跑到（harness 建立时就触发了）；
-        // drawPreview 要等 runLoadingScreen、renderLobbyPreview 要等下拉框 change、
-        // renderSaveList 要等进读档页 —— 三个在无头环境里一次都不会执行。
-        //
-        // ⚠️ 顺序不能换：renderLobbyPreview 会按大厅的下拉框重算 W / H，
-        // 而 drawPreview 读的是当前这局的 game.terrain。反过来的话尺寸对不上，
-        // 会越界读出 undefined。也因为它改全局尺寸，调用方应该把它放在一个用例的
-        // 最后 —— 之后再调 redraw() 画出来的就不是这局的地图了。
-        repaintLobby: () => {
-          if (!game) {
-            return false;
-          }
-          drawPreview();
-          renderSaveList();
-          renderLobbyPreview();
-          return true;
-        },
-        // 合成一次棋盘点击。ui/input.js 的 onBoard 是玩家唯一的操作入口，而它在
-        // 无头环境里完全没有覆盖 —— fastBatch 不产生鼠标事件，烟雾测试也只走绘制。
-        //
-        // 这里把格子坐标反算成 clientX/clientY 再喂给 onBoard，走的是和真实点击
-        // 一模一样的路径（包括 getBoundingClientRect 的换算），而不是绕过它直接调
-        // 内部函数 —— 绕过去就测不到坐标换算写错这类错了。
-        //
-        // 返回点击后的选中态摘要，方便调用方断言"点了确实有反应"。
-        clickCell: (x, y) => {
-          if (!game) {
-            return null;
-          }
-          const rect = canvas.getBoundingClientRect();
-          const scaleX = rect.width ? canvas.width / rect.width : 1;
-          const scaleY = rect.height ? canvas.height / rect.height : 1;
-          const px = ((x + 0.5) * S - cam.x) * zoom;
-          const py = ((y + 0.5) * S - cam.y) * zoom;
-          onBoard({ clientX: rect.left + px / scaleX, clientY: rect.top + py / scaleY });
-          return {
-            kind: game.selected?.kind || null,
-            id: game.selected?.ref?.id || null,
-            x: game.selected?.ref?.x ?? null,
-            y: game.selected?.ref?.y ?? null
-          };
-        }
-      };
-      document.addEventListener("keydown", (event) => {
-        if (event.code === "Space") {
-          event.preventDefault();
-          endTurn();
-        }
-        if (event.key === "n" || event.key === "N") {
-          showScreen("setup");
-        }
-        if (event.key === "Escape" && game) {
-          game.selected = null;
-          refresh();
-        }
-      });
-      for (const id of ["mapSelect", "sizeSelect", "aspectSelect", "complexitySelect", "aiSelect"]) {
-        $(id)?.addEventListener("change", renderLobbyPreview);
-      }
       showScreen("setup");
     }
     document.addEventListener("DOMContentLoaded", setup);

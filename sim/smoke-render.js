@@ -60,6 +60,25 @@ const LIMITS = {
   lobby: { metric: 'ctx', min: 100, label: '大厅预览' }
 };
 
+// setup() 结束后必须挂上事件的元素。src/ui/bindings.js 里漏掉一行
+// addEventListener 不会报任何错 —— 那个按钮只是永远点不动，而无头环境里谁也
+// 不会去点它。这份清单是绑定层唯一的自动化保护，加新按钮时请一并加进来。
+//
+// 只检查"有没有挂"，不检查挂的是什么、点了会发生什么 —— 那些还是得开浏览器。
+const MUST_BE_BOUND = [
+  'board',                                                          // 棋盘点击 / 拖拽 / 缩放
+  'aiSelect', 'mapSelect', 'citySpread', 'aiSpeed', 'buildCap',     // 大厅选项
+  'btnStartGame', 'btnNewGame', 'btnHelp', 'btnInfoPage',           // 大厅按钮
+  'buildGrid', 'buildBody', 'selActions', 'engineerCard',           // 面板事件委托
+  'btnUpgrade', 'btnFullHeal', 'btnEndTurn',                        // 据点与回合
+  'btnPause', 'btnResume', 'btnEndGame',                            // 暂停菜单
+  'btnModalOk', 'btnModalContinue',                                 // 结算弹窗
+  'btnChartPrev', 'btnChartNext',                                   // 统计翻页
+  'btnSaveGame', 'btnSaveConfirm', 'btnSaveOverwrite', 'btnSaveExport', 'btnSaveCancel',
+  'btnLoadPage', 'btnLoadBack', 'btnLoadConfirm', 'btnLoadDelete',
+  'saveListBody', 'btnImportSave', 'btnExportSave', 'importFile'
+];
+
 function requireEntry(debug, name) {
   if (typeof debug[name] !== 'function') {
     throw new Error(`__frontierDebug.${name} 不存在（bundle 是旧的？先跑 node build.js）`);
@@ -99,6 +118,16 @@ function main() {
     process.exit(1);
   }
   let failed = 0;
+
+  // 绑定检查只做一次：setup() 在 createHarness 里已经跑完，之后不会再绑。
+  const unbound = MUST_BE_BOUND.filter(id => !Object.keys(harness.handlersFor(id)).length);
+  if (unbound.length) {
+    failed += 1;
+    console.log(`  FAIL 事件绑定（src/ui/bindings.js）`);
+    console.log(`       这 ${unbound.length} 个元素上一个事件都没挂：${unbound.join('、')}`);
+  } else {
+    console.log(`  OK   事件绑定       ${MUST_BE_BOUND.length} 个元素都挂上了处理器`);
+  }
   CASES.forEach((item, index) => {
     harness.setConfig(baseConfig(item.config));
     try {
@@ -224,10 +253,10 @@ function main() {
     }
   });
   if (failed) {
-    console.log(`\n== ❌ ${failed}/${CASES.length} 个用例的界面路径有问题 ==`);
+    console.log(`\n== ❌ ${failed}/${CASES.length + 1} 项界面检查有问题（绑定 1 项 + 用例 ${CASES.length} 项）==`);
     process.exit(1);
   }
-  console.log(`\n== ✅ 界面路径正常（${CASES.length} 个用例）==`);
+  console.log(`\n== ✅ 界面路径正常（绑定 + ${CASES.length} 个用例）==`);
   process.exit(0);
 }
 
