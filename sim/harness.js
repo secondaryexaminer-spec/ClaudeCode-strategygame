@@ -91,6 +91,26 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
 
   const elCache = new Map();
 
+  // 属性名从 HTML 的 `data-unit-action` 转成 dataset 的 `unitAction`。
+  const camel = name => name.replace(/-([a-z])/g, (_m, ch) => ch.toUpperCase());
+
+  // 极简选择器匹配：只认 `[attr]` 和 `.class` 两种，别的一律不匹配。
+  // 够用的原因是 src/ 里出现的选择器就这两类（`[data-final]`、`[data-type]`、
+  // `.save-row`、`.lblock`……）。写成完整的 CSS 解析器是过度投入，但**返回什么
+  // 都不匹配也不行** —— 那就是原来的 `querySelectorAll: () => []`，会让依赖它的
+  // 整段代码变成永远跑不到的死代码而毫无征兆。
+  function selectorMatches(selector, attrs) {
+    const attrHit = /^\[([\w-]+)\]$/.exec(selector);
+    if (attrHit) {
+      return attrs[attrHit[1]] !== undefined;
+    }
+    const classHit = /^\.([\w-]+)$/.exec(selector);
+    if (classHit) {
+      return String(attrs.class || '').split(/\s+/).includes(classHit[1]);
+    }
+    return false;
+  }
+
   // strictDom：面板层（src/ui/panels.js）的兜底。
   //
   // 它和 strictCanvas 堵的是同一类洞，但手段不同：面板不画图，它拼字符串写进
@@ -117,6 +137,87 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
     }
   }
 
+  // 从一段 innerHTML 里扫出匹配选择器的标签，为每个造一个轻量节点。
+  //
+  // 这不是 HTML 解析器，只够支撑「先写 innerHTML，再 querySelectorAll 回来逐个
+  // 填 textContent」这个模式 —— src/render/stats.js 的汇总卡和
+  // src/ui/bindings.js 的存档行选中都是这么写的。原来 querySelectorAll 恒返回
+  // 空数组，那两段循环一次都进不去。
+  //
+  // 造出来的节点带 dataset 和 textContent，写 textContent 同样走 checkDomWrite，
+  // 所以 strictDom 能抓到往里面填的 undefined / NaN（汇总卡的数字就靠这个）。
+  //
+  // 每次调用都造一批新节点，写进去的值不会留到下次查询 —— 和真实 DOM 不同。
+  // 这不影响覆盖：有价值的是**写入动作经过了 checkDomWrite**，不是值能读回来。
+  function parseNodes(html, selector) {
+    if (!html || typeof html !== 'string') {
+      return [];
+    }
+    const out = [];
+    const tagPattern = /<([a-zA-Z][\w-]*)((?:\s+[\w-]+="[^"]*")*)\s*\/?>/g;
+    let tag;
+    while ((tag = tagPattern.exec(html))) {
+      const attrs = {};
+      const attrPattern = /([\w-]+)="([^"]*)"/g;
+      let attr;
+      while ((attr = attrPattern.exec(tag[2] || ''))) {
+        attrs[attr[1]] = attr[2];
+      }
+      if (!selectorMatches(selector, attrs)) {
+        continue;
+      }
+      const dataset = {};
+      for (const [key, value] of Object.entries(attrs)) {
+        if (key.startsWith('data-')) {
+          dataset[camel(key.slice(5))] = value;
+        }
+      }
+      out.push(makeNode({ dataset, className: attrs.class || '', id: attrs.id || '' }));
+    }
+    return out;
+  }
+
+  // 一个不进 elCache 的轻量节点：解析 innerHTML 得到的子元素，以及合成事件时
+  // 用的 event.target 都是它。
+  //
+  // closest() 是关键：src/ui/bindings.js 的面板按钮**全部走事件委托**，回调第一
+  // 句就是 `event.target.closest('[data-type]')`。原来的打桩恒返回 null，于是每个
+  // 委托回调都在第一个 if 里 return 掉 —— 生产、变卖、升级、工程师建造这些按钮
+  // 的处理逻辑一行都执行不到，而测试里看不出任何异常。
+  function makeNode({ dataset = {}, className = '', id = '', value = '' } = {}) {
+    const node = {
+      id, dataset, className, value,
+      _text: '', _html: '',
+      get textContent() { return this._text; },
+      set textContent(v) { checkDomWrite(this, 'textContent', v); this._text = v; },
+      get innerHTML() { return this._html; },
+      set innerHTML(v) { checkDomWrite(this, 'innerHTML', v); this._html = v; },
+      classList: {
+        add() {}, remove() {},
+        toggle() { return false; },
+        contains(name) { return className.split(/\s+/).includes(name); }
+      },
+      style: {},
+      // 自己匹配就返回自己。真实 DOM 会继续往父节点找，这里没有父子关系 ——
+      // 够用是因为委托回调找的都是被点的那个按钮本身。
+      closest(selector) { return selectorMatches(selector, { ...toAttrs(dataset), class: className, id }) ? node : null; },
+      querySelector() { return null; },
+      querySelectorAll(selector) { return parseNodes(this._html, selector); },
+      appendChild() {}, removeChild() {}, setAttribute() {}, getAttribute() { return null; },
+      addEventListener() {}, removeEventListener() {}, focus() {}, click() {}, remove() {}
+    };
+    return node;
+  }
+
+  // dataset 反查回 HTML 属性名，给 closest 判 `[data-unit-action]` 用。
+  function toAttrs(dataset) {
+    const out = {};
+    for (const [key, value] of Object.entries(dataset || {})) {
+      out['data-' + key.replace(/[A-Z]/g, ch => '-' + ch.toLowerCase())] = value;
+    }
+    return out;
+  }
+
   function elFor(id) {
     if (elCache.has(id)) return elCache.get(id);
     const el = {
@@ -133,17 +234,25 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
       classList: { add() {}, remove() {}, toggle() { return false; }, contains() { return false; } },
       style: {}, dataset: {},
       getContext: () => ctxStub,
-      // 记下这个元素被挂了哪些事件，供 boundElements() 检查绑定层有没有漏。
-      // 只记类型和次数，不真的存回调 —— 无头环境里没人会触发它们。
+      // 记下这个元素被挂了哪些事件，供 handlersFor() 检查绑定层有没有漏，
+      // 同时**把回调本身存下来** —— dispatchOn() 要靠它合成点击。只记次数不存
+      // 回调的话，"绑上了"能验，"绑对了"还是验不了。
       _handlers: {},
-      addEventListener(type) { this._handlers[type] = (this._handlers[type] || 0) + 1; },
+      _listeners: {},
+      addEventListener(type, fn) {
+        this._handlers[type] = (this._handlers[type] || 0) + 1;
+        (this._listeners[type] = this._listeners[type] || []).push(fn);
+      },
       removeEventListener() {},
       _onclick: null,
       get onclick() { return this._onclick; },
       set onclick(fn) { this._onclick = fn; if (fn) { this._handlers.onclick = 1; } },
       appendChild() {}, removeChild() {}, insertAdjacentHTML() {},
       setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
-      closest() { return null; }, querySelector() { return null; }, querySelectorAll() { return []; },
+      closest() { return null; },
+      querySelector() { return null; },
+      // 从自己刚写进去的 innerHTML 里解析，见 parseNodes 的注释。
+      querySelectorAll(selector) { return parseNodes(this._html, selector); },
       // 返回和 canvas 像素尺寸一致的矩形（即 CSS 缩放比为 1:1）。
       // 原来这里恒返回 width: 0，会让 ui/input.js 的 `canvas.width / rect.width`
       // 变成 0/0 = NaN，任何合成点击都落在 NaN 格上 —— 点击路径根本没法测。
@@ -166,6 +275,9 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
   }
   global.document = {
     getElementById: id => elFor(id),
+    // saves.js 的 downloadSaveFile 会往 body 上挂一个临时 <a> 再点掉它。
+    // 少了这个属性，导出存档会在 appendChild 上炸掉。
+    body: { appendChild() {}, removeChild() {} },
     querySelector: () => null,
     querySelectorAll: () => [],
     createElement: () => elFor('__el_' + Math.random()),
@@ -183,6 +295,37 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
   global.removeEventListener = () => {};
   global.requestAnimationFrame = () => 0;
   global.cancelAnimationFrame = () => {};
+
+  // 内存版 localStorage。
+  //
+  // ⚠️ 必须在 eval(gameSrc) **之前**装好：src/io/storage.js 在模块求值的那一刻就
+  // 执行 `typeof localStorage !== 'undefined'` 并把结果冻进 `saveStore.available`。
+  // 晚一步装，整个存档链路会**静默**变成空操作 —— setItem 什么都不做、listSaves
+  // 恒返回空数组，而且不抛任何错。存档测不到过去被记成"打桩的天花板"，其实只是
+  // 这里没接上。（这个因果做过对照实测，把这段挪到 eval 之后，存档往返链会红。）
+  //
+  // 只实现 saves.js 真正用到的那几个方法（含 length / key(i)，listSaves 靠它们
+  // 遍历）。用 Map 而不是普通对象：键名由存档名拼出来，普通对象会和 __proto__
+  // 这类键冲突。
+  const storageData = new Map();
+  global.localStorage = {
+    get length() { return storageData.size; },
+    key(index) { return [...storageData.keys()][index] ?? null; },
+    getItem(key) { return storageData.has(String(key)) ? storageData.get(String(key)) : null; },
+    setItem(key, value) { storageData.set(String(key), String(value)); },
+    removeItem(key) { storageData.delete(String(key)); },
+    clear() { storageData.clear(); }
+  };
+  // 导出存档要用（saves.js 的 downloadSaveFile）。无头环境里不真的下载，
+  // 只要不抛错、并且让测试能确认"确实走到了导出"。
+  const downloads = [];
+  global.Blob = class {
+    constructor(parts) { this.parts = parts; this._text = parts.join(''); }
+  };
+  global.URL = {
+    createObjectURL(blob) { downloads.push(blob?._text ?? ''); return `blob:stub/${downloads.length}`; },
+    revokeObjectURL() {}
+  };
   global.MessageChannel = class {
     constructor() {
       const port1 = { onmessage: null };
@@ -226,6 +369,47 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
       list.forEach(fn => fn(event));
       return list.length;
     },
+    // 合成一次事件喂给某个元素上注册的处理器（含 onclick 赋值）。
+    //
+    // 这是"绑上了"到"绑对了"之间那一步。src/ui/bindings.js 里的面板按钮全部走
+    // 事件委托，回调第一句是 `event.target.closest('[data-xxx]')` —— 所以调用方
+    // 传 `dataset` 而不是元素 id，harness 据此造一个能被 closest 认出来的 target。
+    //
+    // 例：模拟点击生产栏里的"造民兵"按钮
+    //   dispatchOn('buildGrid', 'click', { dataset: { type: 'militia' } })
+    //
+    // 返回真正被调用的处理器个数。0 表示这个元素上根本没挂这个事件 —— 调用方
+    // 应当把它当成失败，而不是"点了没反应"。
+    dispatchOn(id, evt, payload = {}) {
+      const el = elCache.get(id);
+      if (!el) {
+        return 0;
+      }
+      const { dataset, className, value, ...rest } = payload;
+      const target = makeNode({ dataset: dataset || {}, className: className || '', id, value });
+      const event = {
+        target,
+        currentTarget: el,
+        preventDefault() {}, stopPropagation() {},
+        ...rest
+      };
+      let fired = 0;
+      if (evt === 'click' && typeof el._onclick === 'function') {
+        el._onclick(event);
+        fired += 1;
+      }
+      for (const fn of el._listeners?.[evt] || []) {
+        fn(event);
+        fired += 1;
+      }
+      return fired;
+    },
+    // 存档后端的直接视图。用来断言"保存真的写进去了"而不只是"没抛错"。
+    storageKeys: () => [...storageData.keys()],
+    storageGet: key => (storageData.has(key) ? storageData.get(key) : null),
+    storageClear: () => storageData.clear(),
+    // downloadSaveFile 导出过的文件内容（JSON 字符串）。无头环境里不真的下载。
+    downloads: () => downloads.slice(),
     // Apply a full config for the next scenario (values persist via elFor cache).
     setConfig(next) {
       for (const [id, val] of Object.entries(next)) {

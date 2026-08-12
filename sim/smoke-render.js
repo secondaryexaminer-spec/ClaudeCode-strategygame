@@ -54,12 +54,20 @@ const CASES = [
 // 换完请确认四个用例仍然都能跑到该跑的分支（尤其是"内陆·可操作"的移动链）。
 const SEED = 20260811;
 
+// 每层量什么、下限多少。source 指向 counts 里的哪一次测量 —— 同一次测量可以被
+// 量两遍（统计层既量 ctx 也量 dom），因为它们保护的是不同的东西：
+// ctx 掉下去说明折线图没画，dom 掉下去说明汇总卡的数字没填。
 const LIMITS = {
-  board: { metric: 'ctx', min: 200, label: '棋盘绘制' },
-  panels: { metric: 'dom', min: 30, label: '面板刷新' },
-  stats: { metric: 'ctx', min: 20, label: '统计图表' },
-  click: { metric: 'hits', min: 2, label: '棋盘点击' },
-  lobby: { metric: 'ctx', min: 100, label: '大厅预览' }
+  board: { source: 'board', metric: 'ctx', min: 200, label: '棋盘绘制' },
+  panels: { source: 'panels', metric: 'dom', min: 30, label: '面板刷新' },
+  stats: { source: 'stats', metric: 'ctx', min: 20, label: '统计图表' },
+  // 汇总卡的六个数字靠 querySelectorAll('[data-final]') 逐个 textContent 填进去。
+  // 原来打桩的 querySelectorAll 恒返回空数组，这段循环一次都进不去 —— 我上一轮
+  // 把这记成了"打桩的天花板"，其实是打桩自己砌的墙：补上最小的 innerHTML 解析
+  // 之后就跑到了，实测稳定 6 次（外加标题和 summary 各一次，共 8）。
+  statsCards: { source: 'stats', metric: 'dom', min: 6, label: '汇总卡' },
+  click: { source: 'click', metric: 'hits', min: 2, label: '棋盘点击' },
+  lobby: { source: 'lobby', metric: 'ctx', min: 100, label: '大厅预览' }
 };
 
 // 只在 interactive 用例里跑：构造出特定局面，逐条验证 onBoard 的分支。
@@ -181,8 +189,168 @@ const INTERACTION_CHECKS = [
       }
       return `${delivered} 个 keydown 处理器`;
     }
+  },
+  {
+    // 以下两条走的是**面板按钮**，不是棋盘点击。
+    //
+    // 这一层过去完全没有覆盖：MUST_BE_BOUND 只验"挂上了处理器"，点了会发生什么
+    // 一概不管。而 bindings.js 里的面板按钮全部走事件委托，回调第一句就是
+    // `event.target.closest('[data-xxx]')` —— 换句话说，只要 harness 的 closest
+    // 返回 null，每个回调都在第一个 if 里 return，测试还是全绿。
+    // 补上最小的 closest 实现之后这一层才真的可测（见 sim/harness.js 的 makeNode）。
+    //
+    // ⚠️ 变卖必须排在生产**前面**，两条链是串起来的：开局是紧密部署，己方城市上
+    // 全站着单位，而 buildAtSite 要求据点那一格是空的。所以先卖掉城里的兵腾出
+    // 位置，再在同一座城生产 —— 这也正好是真实的操作序列。
+    //
+    // 为什么要卖**两个**：开局金币 45，而后面工程师下水那条链要花 42 造运兵船。
+    // 卖一个民兵只回收 8（refund = floor(cost/2)），生产再花掉 16，净支出 8，
+    // 下水链就会因为差钱而失败 —— 那看起来像派发链断了，其实只是预算被这条链
+    // 挤掉了。卖两个至少 +16、生产一个 -16，净支出不为正，两条链互不干扰。
+    //
+    // 两个卖的目的不同：第一个必须是**城里那个**（腾出据点格），第二个是任意
+    // 己方单位（纯粹筹钱）。实测 coast 图上只有一座己方城市站着兵，所以不能
+    // 要求"两座有驻军的城"。
+    name: '面板变卖',
+    run(debug, spot, harness) {
+      const before = debug.summary();
+      const city = before.sites.find(entry => {
+        if (entry.owner !== 'player' || entry.kind !== 'city') {
+          return false;
+        }
+        const occupant = debug.inspectCell(entry.x, entry.y);
+        return occupant && occupant.owner === 'player';
+      });
+      if (!city) {
+        throw new Error('找不到"己方城市上站着己方单位"的位置，变卖与生产链都无从下手');
+      }
+      const spare = before.units.find(entry => entry.owner === 'player' && (entry.x !== city.x || entry.y !== city.y));
+      if (!spare) {
+        throw new Error('除了城里那个之外没有别的己方单位，凑不出生产链要的预算');
+      }
+      const sold = [];
+      for (const at of [city, spare]) {
+        const picked = debug.clickCell(at.x, at.y);
+        if (!picked?.id) {
+          throw new Error(`点 (${at.x},${at.y}) 的己方单位没有选中，变卖链无从下手`);
+        }
+        if (!harness.dispatchOn('selActions', 'click', { dataset: { unitAction: 'sell' } })) {
+          throw new Error('selActions 上没有 click 处理器（事件委托没绑上）');
+        }
+        sold.push(at);
+      }
+      const after = debug.summary();
+      if (after.units.length !== before.units.length - 2) {
+        throw new Error(`点变卖按钮单位没有消失（${before.units.length} → ${after.units.length}，期望 -2）`);
+      }
+      // 交给下一条链，见上面的顺序说明。
+      spot.emptiedCity = city;
+      return `卖掉 ${sold.length} 个（含 ${city.name} 驻军）`;
+    }
+  },
+  {
+    name: '面板生产',
+    run(debug, spot, harness) {
+      const city = spot.emptiedCity;
+      if (!city) {
+        throw new Error('上一条变卖链没有腾出城市（它应该先跑）');
+      }
+      if (debug.inspectCell(city.x, city.y)) {
+        throw new Error(`${city.name} 那一格还站着单位，buildAtSite 会直接拒绝`);
+      }
+      const before = debug.summary();
+      debug.clickCell(city.x, city.y);
+      const fired = harness.dispatchOn('buildGrid', 'click', { dataset: { type: 'militia' } });
+      if (!fired) {
+        throw new Error('buildGrid 上没有 click 处理器（事件委托没绑上）');
+      }
+      const after = debug.summary();
+      if (after.units.length !== before.units.length + 1) {
+        throw new Error(`点生产按钮没造出单位（${before.units.length} → ${after.units.length}，民兵 16 金，开局 45 金）`);
+      }
+      return `${city.name} 造出 militia`;
+    }
+  },
+  {
+    // 存档链路过去一条都没跑过 —— 不是因为难测，是因为 harness 没装 localStorage，
+    // 于是 saveStore.available 恒为 false，保存和读档**静默**变成空操作。
+    // 装上内存版之后这条链才成立（见 sim/harness.js 里 localStorage 打桩的注释）。
+    //
+    // 断言的是**往返一致**而不只是"没抛错"：存 → 改局面 → 读回来 → 局面复原。
+    // 这样序列化漏字段、loadPayload 没恢复、存档行的 data-key 拼错，都会被抓住。
+    name: '存档往返',
+    run(debug, spot, harness) {
+      harness.storageClear();
+      const before = debug.summary();
+      harness.dispatchOn('btnSaveGame', 'click');
+      if (!harness.dispatchOn('btnSaveConfirm', 'click')) {
+        throw new Error('btnSaveConfirm 上没有 click 处理器');
+      }
+      const keys = harness.storageKeys().filter(key => key.startsWith('frontier_save_'));
+      if (keys.length !== 1) {
+        throw new Error(`保存后存档条目有 ${keys.length} 份，期望 1 份（localStorage 打桩没接上？）`);
+      }
+      // 故意把局面改脏：多摆两个单位，读档后必须消失。
+      // 少了这一步，"读档没做任何事"和"读档正确恢复"在断言上分不出来。
+      debug.placeUnit('militia', 'player', spot.landA.x, spot.landA.y);
+      debug.placeUnit('militia', 'player', spot.landB.x, spot.landB.y);
+      if (debug.summary().units.length !== before.units.length + 2) {
+        throw new Error('placeUnit 没有把局面改脏，往返断言会失去意义');
+      }
+      // 进读档页会触发 renderSaveList，把存档行写进 saveListBody 的 innerHTML；
+      // 点击那一行走的是 `.save-row` 的委托，靠 dataset.key 认出选的是哪一份。
+      harness.dispatchOn('btnLoadPage', 'click');
+      if (!harness.dispatchOn('saveListBody', 'click', { className: 'save-row', dataset: { key: keys[0] } })) {
+        throw new Error('saveListBody 上没有 click 处理器');
+      }
+      if (!harness.dispatchOn('btnLoadConfirm', 'click')) {
+        throw new Error('btnLoadConfirm 上没有 click 处理器');
+      }
+      const after = debug.summary();
+      if (after.units.length !== before.units.length) {
+        throw new Error(`读档后单位数没有复原（存档时 ${before.units.length}、改脏后 ${before.units.length + 2}、读回来 ${after.units.length}）`);
+      }
+      if (after.turn !== before.turn) {
+        throw new Error(`读档后回合数不对（${before.turn} → ${after.turn}）`);
+      }
+      // 导出走的是另一条路（Blob + createObjectURL），顺带验一下别抛错。
+      harness.dispatchOn('btnSaveExport', 'click');
+      const exported = harness.downloads();
+      if (!exported.length || !exported[exported.length - 1].includes('"state"')) {
+        throw new Error('导出没有产生带 state 字段的存档文件');
+      }
+      return `${before.units.length} 单位往返一致 · 导出 ${exported.length} 份`;
+    }
   }
 ];
+
+// 大厅的 change 重渲染。
+//
+// ⚠️ 必须单独放在**所有**用例内容之后跑，不能并进 INTERACTION_CHECKS：
+// renderLobbyPreview 会按大厅下拉框重算 W / H，而 counts.lobby 里的 drawPreview
+// 读的是当前这局的 game.terrain —— 顺序反了会越界读出 undefined。
+// 这和 __frontierDebug.repaintLobby 的注释是同一个坑。
+function checkLobbyRerender(harness) {
+  harness.resetCtxCalls();
+  const mapFired = harness.dispatchOn('mapSelect', 'change');
+  if (!mapFired) {
+    throw new Error('mapSelect 上没有 change 处理器（换地图不会重画预览）');
+  }
+  const ctx = harness.ctxCalls();
+  if (ctx < LIMITS.lobby.min) {
+    throw new Error(`换地图后大厅预览只画了 ${ctx} 次（下限 ${LIMITS.lobby.min}），重渲染多半没跑`);
+  }
+  harness.resetDomWrites();
+  const aiFired = harness.dispatchOn('aiSelect', 'change');
+  if (!aiFired) {
+    throw new Error('aiSelect 上没有 change 处理器（改 AI 数量不会重建设置面板）');
+  }
+  const dom = harness.domWrites();
+  if (dom < 1) {
+    throw new Error('改 AI 数量没有产生任何 DOM 写入（renderAISettings 没跑）');
+  }
+  return `换地图 ${ctx} 次绘制 · 改 AI 数量 ${dom} 次写入`;
+}
 
 // setup() 结束后必须挂上事件的元素。src/ui/bindings.js 里漏掉一行
 // addEventListener 不会报任何错 —— 那个按钮只是永远点不动，而无头环境里谁也
@@ -431,15 +599,19 @@ function main() {
       counts.lobby = measure(() => harness.debug.repaintLobby());
 
       const parts = [];
-      for (const [layer, limit] of Object.entries(LIMITS)) {
-        const actual = counts[layer][limit.metric];
+      for (const [, limit] of Object.entries(LIMITS)) {
+        const actual = counts[limit.source][limit.metric];
         if (actual < limit.min) {
           throw new Error(`${limit.label}只产生了 ${actual} 次 ${limit.metric} 调用（下限 ${limit.min}），这一层多半没真正执行`);
         }
         parts.push(`${limit.label} ${String(actual).padStart(5)}`);
       }
+      // 大厅的 change 重渲染。放在这里是因为它会按下拉框重算 W / H —— 前面所有
+      // 依赖当前局尺寸的测量都必须已经跑完。
+      const lobbyRerender = checkLobbyRerender(harness);
       const summary = harness.debug.summary();
       console.log(`  OK   ${item.id.padEnd(12)} 单位 ${String(summary.units.length).padStart(3)} · 据点 ${String(summary.sites.length).padStart(3)} · ${parts.join(' · ')}`);
+      console.log(`       大厅重渲染 ${lobbyRerender}`);
     } catch (err) {
       failed += 1;
       console.log(`  FAIL ${item.id}`);
