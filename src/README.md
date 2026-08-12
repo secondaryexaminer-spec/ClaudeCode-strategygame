@@ -1,6 +1,6 @@
 # 源码结构
 
-35 个模块 + 一个装配层。`src/main.js` 里**没有游戏逻辑** —— 它只持有全局状态、
+39 个模块 + 一个装配层。`src/main.js` 里**没有游戏逻辑** —— 它只持有全局状态、
 用 `rt` 门面把状态交出去、按依赖顺序把模块接起来。
 
 想改游戏行为，去下面对应的模块，不要往 `main.js` 加函数。
@@ -14,15 +14,15 @@
                         │  持有 8 个 let + rt 门面
       ┌─────────────┬───┴───┬──────────────┬────────────┐
       ▼             ▼       ▼              ▼            ▼
-   ui/ (6)      render/(2) debug/(2)    io/ (2)     world/ (2)
-   1319 行       379 行    424 行       186 行       482 行
+   ui/ (6)      render/(2) debug/(2)    io/ (4)     world/ (2)
+   1317 行       379 行    450 行       404 行       483 行
       └─────────────┴───┬───┴──────────────┴────────────┘
                         ▼
                     ai/ (6) 1373 行
                         ▼
-                   game/ (9) 1303 行
+                   game/ (9) 1302 行
                         ▼
-                   core/ (6) 467 行
+                   core/ (8) 700 行
 ```
 
 `ui/` 和 `render/` 是**叶子层**：除了 `main.js` 没有任何模块 import 它们。
@@ -32,14 +32,33 @@
 
 | 层 | 模块 | 管什么 |
 |---|---|---|
-| `core/` | constants, utils, grid, owners, queries, timing | 常量表、纯函数、格子几何、阵营关系、场上查询、异步节流 |
+| `core/` | constants, utils, grid, owners, queries, timing, **mapdefs**, **rules** | 常量表、纯函数、格子几何、阵营关系、场上查询、异步节流、地图定义、规则配置 |
 | `game/` | entities, movement, combat, build, transport, turn, turnflow, stats, newgame | 规则本身：单位、移动、战斗、生产、运输、回合推进、开局 |
 | `ai/` | scoring, pathing, intent, decide, scripted, turnloop | 四层单向：scoring（值多少分）→ intent（想干什么）→ decide（怎么做）→ turnloop（谁先动） |
-| `world/` | mapgen, worldgen | 地形生成、城市布点、初始部署 |
+| `world/` | mapgen, worldgen | 地形生成（按 `core/mapdefs.js` 的 steps 执行）、城市布点、初始部署 |
 | `render/` | board, stats | 棋盘绘制、统计图表。只读状态，不改状态 |
 | `ui/` | panels, input, lobby, bindings, screens, notify | 面板刷新、鼠标翻译、大厅、事件绑定、屏幕切换、日志与提示 |
-| `io/` | storage, saves | KV 后端抽象、存档业务层 |
-| `debug/` | fastsim, hooks | 无头快跑、`window.__frontierDebug` 的 18 个测试入口 |
+| `io/` | storage, saves, **savestate**, **input-backend** | KV 后端、存档仓储、存档结构与版本、输入源抽象 |
+| `debug/` | fastsim, hooks | 无头快跑、`window.__frontierDebug` 的 21 个测试入口 |
+
+## 数据模型与 IO 抽象
+
+这四个模块是"把隐式约定变成显式数据"的那一层，改它们比改逻辑更要小心：
+
+| 模块 | 定义什么 | 改它的代价 |
+|---|---|---|
+| `core/mapdefs.js` | 12 张地图的绘制步骤 | 改 steps = 改地形 = **行为基线失效** |
+| `core/rules.js` | 可调参数的来源/类型/默认值/范围 | min/max 必须照抄 `index.html`，写错会静默改变行为 |
+| `io/savestate.js` | 存档字段、版本、迁移、校验 | 改 `game` 结构时要同步考虑版本号 |
+| `io/input-backend.js` | 事件 → 画布像素 | 换输入源（触屏、回放）只动这里 |
+
+两条容易被忽略的约定：
+
+- **配置只在 `newGame` 开头读一次**，之后一律用 `settings`。曾经有第二条路径
+  （地形和尺寸直接读 DOM），导致改坏配置读取却 `verify` 全绿 —— 因为地形压根
+  不看 `settings.map`。
+- **`MAPS` 是 `MAP_DEFS` 的派生视图**（只有名字和 `sea`）。加地图改
+  `core/mapdefs.js` 一处即可。
 
 ## rt 门面：三条必须遵守的规则
 
