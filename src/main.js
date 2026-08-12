@@ -302,7 +302,7 @@ import { typeMeta } from './core/utils.js';
   savesApi = createSaves(rt);
   const {
     buildSavePayload, saveAsNewSave, overwriteCurrentSave,
-    importSaveToList, currentSaveName, loadSave, deleteSave, readSave
+    importSaveToList, currentSaveName, loadSave, deleteSave, readSave, lastSaveError
   } = savesApi;
   const {
     makeCities, makeSpecialSites, makeNavalSites, spawnLand, spawnSea
@@ -378,7 +378,7 @@ import { typeMeta } from './core/utils.js';
     buildAtSite, buildBudgetLeft, sellUnit, upgradeSite, fullHealSite, buildCamp,
     autoLoadAdjacent, autoUnloadAdjacent, endGameNeutral,
     buildSavePayload, saveAsNewSave, overwriteCurrentSave, importSaveToList,
-    currentSaveName, loadSave, deleteSave, readSave
+    currentSaveName, loadSave, deleteSave, readSave, lastSaveError
   });
   const { debugSummary, fastRun, fastBatch } = createFastSim(rt, {
     advanceTurn: () => turnFlowApi.advanceTurn(),

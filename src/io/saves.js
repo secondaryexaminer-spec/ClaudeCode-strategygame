@@ -12,6 +12,7 @@
 // 把字节读出来交给它。
 import { MAPS } from '../core/constants.js';
 import { saveStore } from './storage.js';
+import { toSaveState, parseSaveState } from './savestate.js';
 
 const SAVE_PREFIX = 'frontier_save_';
 
@@ -34,6 +35,10 @@ export function downloadSaveFile(payload) {
 }
 
 export function createSaves(rt) {
+  // 最近一次读档 / 导入失败的原因，供界面提示用。比笼统的"存档已损坏"有用得多
+  // —— "版本比当前支持的还新"和"地形高度对不上"该给玩家不同的提示。
+  let lastLoadError = null;
+
   function listSaves() {
     const saves = [];
     for (const key of saveStore.keys()) {
@@ -50,16 +55,16 @@ export function createSaves(rt) {
     return saves.sort((a, b) => b.savedAt - a.savedAt);
   }
 
+  // 存档体的结构、版本与排除字段都在 io/savestate.js —— 这里只补上"叫什么名字、
+  // 属于哪张地图"这类仓储层才知道的信息。
   function buildSavePayload(name) {
-    const { selected, pendingOrder, ...rest } = rt.game;
-    return {
-      name: name || `存档 ${new Date().toLocaleString('zh-CN')}`,
-      savedAt: Date.now(),
-      map: MAPS[rt.game.settings.map]?.name || rt.game.settings.map,
-      turn: rt.game.turn,
-      W: rt.W, H: rt.H, S: rt.S,
-      state: rest
-    };
+    const payload = toSaveState(
+      rt.game,
+      { W: rt.W, H: rt.H, S: rt.S },
+      name || `存档 ${new Date().toLocaleString('zh-CN')}`
+    );
+    payload.map = MAPS[rt.game.settings.map]?.name || rt.game.settings.map;
+    return payload;
   }
 
   function saveAsNewSave(name) {
@@ -88,23 +93,27 @@ export function createSaves(rt) {
     }
   }
 
-  function importSaveToList(payload) {
-    if (!payload?.state) {
+  // 导入外部存档文件。**入口处就迁移并校验**，而不是等读档时才发现问题 ——
+  // 否则一份坏档会先安静地进列表，玩家点它才报错，看起来像是读档功能坏了。
+  // 迁移后再存，所以列表里躺着的永远是当前版本。
+  function importSaveToList(rawPayload) {
+    const { payload, error } = parseSaveState(rawPayload);
+    if (error) {
+      lastLoadError = error;
       return false;
     }
     try {
       saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
+        ...payload,
         name: payload.name || '导入的存档',
         savedAt: payload.savedAt || Date.now(),
         map: payload.map || '',
-        turn: payload.turn || 1,
-        W: payload.W,
-        H: payload.H,
-        S: payload.S,
-        state: payload.state
+        turn: payload.turn || 1
       }));
+      lastLoadError = null;
       return true;
     } catch (err) {
+      lastLoadError = '写入存储失败，空间可能已满';
       return false;
     }
   }
@@ -120,18 +129,31 @@ export function createSaves(rt) {
     }
   }
 
+  // 读档：解析 → 迁移到当前版本 → 校验 → 交给运行时装载。
+  // 任何一步失败都返回 false，让调用方转成 toast —— 读档失败是常见情况
+  // （存档损坏、版本太新），不该让它抛异常冒到界面层。
   function loadSave(key) {
-    let payload;
+    let raw;
     try {
-      payload = JSON.parse(saveStore.getItem(key));
+      raw = JSON.parse(saveStore.getItem(key));
     } catch (err) {
+      return false;
+    }
+    const { payload, error } = parseSaveState(raw);
+    if (error) {
+      lastLoadError = error;
       return false;
     }
     if (rt.loadPayload(payload)) {
       rt.currentSaveKey = key;
+      lastLoadError = null;
       return true;
     }
     return false;
+  }
+
+  function lastSaveError() {
+    return lastLoadError;
   }
 
   function deleteSave(key) {
@@ -151,6 +173,7 @@ export function createSaves(rt) {
   return {
     SAVE_PREFIX,
     listSaves, buildSavePayload, saveAsNewSave, overwriteCurrentSave,
-    importSaveToList, currentSaveName, loadSave, deleteSave, readSave
+    importSaveToList, currentSaveName, loadSave, deleteSave, readSave,
+    lastSaveError
   };
 }

@@ -1634,6 +1634,93 @@
   }
   var saveStore = createLocalStorageBackend();
 
+  // src/io/savestate.js
+  var SAVE_VERSION = 2;
+  var TRANSIENT_FIELDS = {
+    selected: '当前选中的是谁，纯界面状态。读档后应当是"什么都没选"',
+    pendingOrder: "工程师的待下水指令，是个做到一半的操作。读档后应当清空"
+  };
+  var REQUIRED_STATE_FIELDS = [
+    "terrain",
+    "units",
+    "sites",
+    "ownerOrder",
+    "side",
+    "turn",
+    "teams",
+    "goldByOwner",
+    "settings"
+  ];
+  var MIGRATIONS = {
+    1: (payload) => ({ ...payload, version: 2 })
+  };
+  function toSaveState(game, dimensions, name) {
+    const state = {};
+    for (const [key, value] of Object.entries(game)) {
+      if (!(key in TRANSIENT_FIELDS)) {
+        state[key] = value;
+      }
+    }
+    return {
+      version: SAVE_VERSION,
+      name,
+      savedAt: Date.now(),
+      turn: game.turn,
+      W: dimensions.W,
+      H: dimensions.H,
+      S: dimensions.S,
+      state
+    };
+  }
+  function validateSaveState(payload) {
+    if (!payload || typeof payload !== "object") {
+      return "存档内容不是一个对象";
+    }
+    if (!payload.state || typeof payload.state !== "object") {
+      return "存档缺少 state 字段";
+    }
+    for (const field of REQUIRED_STATE_FIELDS) {
+      if (payload.state[field] === void 0) {
+        return `存档的 state 里缺少必需字段 ${field}`;
+      }
+    }
+    if (!Number.isFinite(payload.W) || !Number.isFinite(payload.H) || !Number.isFinite(payload.S)) {
+      return "存档里的地图尺寸（W / H / S）不是数字";
+    }
+    if (!Array.isArray(payload.state.terrain) || payload.state.terrain.length !== payload.H) {
+      return `存档的地形高度与 H 对不上（H=${payload.H}）`;
+    }
+    return null;
+  }
+  function migrateSaveState(payload) {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    let current = payload;
+    let version = Number(current.version) || 1;
+    if (version > SAVE_VERSION) {
+      return null;
+    }
+    while (version < SAVE_VERSION) {
+      const step = MIGRATIONS[version];
+      if (!step) {
+        return null;
+      }
+      current = step(current);
+      version = Number(current.version) || version + 1;
+    }
+    return current;
+  }
+  function parseSaveState(raw) {
+    const migrated = migrateSaveState(raw);
+    if (!migrated) {
+      const version = raw && raw.version;
+      return { error: version > SAVE_VERSION ? `存档版本 ${version} 比当前支持的 ${SAVE_VERSION} 还新` : "存档版本无法识别" };
+    }
+    const problem = validateSaveState(migrated);
+    return problem ? { error: problem } : { payload: migrated };
+  }
+
   // src/io/saves.js
   var SAVE_PREFIX = "frontier_save_";
   function downloadSaveFile(payload) {
@@ -1652,6 +1739,7 @@
     setTimeout(() => URL.revokeObjectURL(url), 1e3);
   }
   function createSaves(rt) {
+    let lastLoadError = null;
     function listSaves() {
       const saves = [];
       for (const key of saveStore.keys()) {
@@ -1667,17 +1755,13 @@
       return saves.sort((a, b) => b.savedAt - a.savedAt);
     }
     function buildSavePayload(name) {
-      const { selected, pendingOrder, ...rest } = rt.game;
-      return {
-        name: name || `存档 ${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN")}`,
-        savedAt: Date.now(),
-        map: MAPS[rt.game.settings.map]?.name || rt.game.settings.map,
-        turn: rt.game.turn,
-        W: rt.W,
-        H: rt.H,
-        S: rt.S,
-        state: rest
-      };
+      const payload = toSaveState(
+        rt.game,
+        { W: rt.W, H: rt.H, S: rt.S },
+        name || `存档 ${(/* @__PURE__ */ new Date()).toLocaleString("zh-CN")}`
+      );
+      payload.map = MAPS[rt.game.settings.map]?.name || rt.game.settings.map;
+      return payload;
     }
     function saveAsNewSave(name) {
       if (!rt.game) {
@@ -1703,23 +1787,24 @@
         return false;
       }
     }
-    function importSaveToList(payload) {
-      if (!payload?.state) {
+    function importSaveToList(rawPayload) {
+      const { payload, error } = parseSaveState(rawPayload);
+      if (error) {
+        lastLoadError = error;
         return false;
       }
       try {
         saveStore.setItem(SAVE_PREFIX + Date.now(), JSON.stringify({
+          ...payload,
           name: payload.name || "导入的存档",
           savedAt: payload.savedAt || Date.now(),
           map: payload.map || "",
-          turn: payload.turn || 1,
-          W: payload.W,
-          H: payload.H,
-          S: payload.S,
-          state: payload.state
+          turn: payload.turn || 1
         }));
+        lastLoadError = null;
         return true;
       } catch (err) {
+        lastLoadError = "写入存储失败，空间可能已满";
         return false;
       }
     }
@@ -1734,17 +1819,26 @@
       }
     }
     function loadSave(key) {
-      let payload;
+      let raw;
       try {
-        payload = JSON.parse(saveStore.getItem(key));
+        raw = JSON.parse(saveStore.getItem(key));
       } catch (err) {
+        return false;
+      }
+      const { payload, error } = parseSaveState(raw);
+      if (error) {
+        lastLoadError = error;
         return false;
       }
       if (rt.loadPayload(payload)) {
         rt.currentSaveKey = key;
+        lastLoadError = null;
         return true;
       }
       return false;
+    }
+    function lastSaveError() {
+      return lastLoadError;
     }
     function deleteSave(key) {
       saveStore.removeItem(key);
@@ -1766,7 +1860,8 @@
       currentSaveName,
       loadSave,
       deleteSave,
-      readSave
+      readSave,
+      lastSaveError
     };
   }
 
@@ -4219,7 +4314,8 @@
       currentSaveName,
       loadSave,
       deleteSave,
-      readSave
+      readSave,
+      lastSaveError
     } = deps;
     let selectedSaveKey = null;
     function bindLobby() {
@@ -4454,7 +4550,7 @@
           return;
         }
         if (!loadSave(selectedSaveKey)) {
-          rt.toast("该存档已损坏，无法读取。");
+          rt.toast(`无法读取该存档：${lastSaveError() || "内容已损坏"}。`);
         }
       };
       $("btnLoadDelete").onclick = () => {
@@ -4496,7 +4592,7 @@
               renderSaveList();
               rt.toast("已导入存档并加入列表，点击它即可继续。");
             } else {
-              rt.toast("导入失败：文件格式不正确。");
+              rt.toast(`导入失败：${lastSaveError() || "文件格式不正确"}。`);
             }
           } catch (err) {
             rt.toast("导入失败：文件无法解析。");
@@ -5115,7 +5211,8 @@
       currentSaveName,
       loadSave,
       deleteSave,
-      readSave
+      readSave,
+      lastSaveError
     } = savesApi;
     const {
       makeCities,
@@ -5276,7 +5373,8 @@
       currentSaveName,
       loadSave,
       deleteSave,
-      readSave
+      readSave,
+      lastSaveError
     });
     const { debugSummary, fastRun, fastBatch } = createFastSim(rt, {
       advanceTurn: () => turnFlowApi.advanceTurn(),

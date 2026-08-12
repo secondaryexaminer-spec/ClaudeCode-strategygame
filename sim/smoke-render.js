@@ -321,6 +321,78 @@ const INTERACTION_CHECKS = [
       }
       return `${before.units.length} 单位往返一致 · 导出 ${exported.length} 份`;
     }
+  },
+  {
+    // 存档版本迁移。这两条路径靠正常保存永远走不到 —— 正常保存写出来的都是
+    // 当前版本，所以必须手工把存档塞进存储里构造出来。
+    //
+    // 没有这条链的话，io/savestate.js 的 migrateSaveState 整个是死代码：
+    // 迁移写错了不会有任何征兆，直到某天用户拿着老存档打不开。
+    name: '存档迁移',
+    run(debug, spot, harness) {
+      const key = harness.storageKeys().find(entry => entry.startsWith('frontier_save_'));
+      if (!key) {
+        throw new Error('存储里没有存档，迁移链要接在存档往返链后面');
+      }
+      const current = JSON.parse(harness.storageGet(key));
+      if (!current.version) {
+        throw new Error('当前保存的存档没有 version 字段（toSaveState 没写进去？）');
+      }
+      const saved = current.state.units.length;
+
+      // ⚠️ 每次尝试读档**之前必须把局面改脏**，否则"读了"和"没读"分不出来 ——
+      // 这几份测试存档都是当前局面的快照，不改脏的话两种结果的单位数一模一样，
+      // 断言就是摆设。这是实测踩到的：第一版写完跑阳性对照，三条 0/3 全部
+      // "改坏后依然全绿"。
+      const makeDirty = () => {
+        debug.placeUnit('militia', 'player', spot.landA.x, spot.landA.y);
+        return debug.summary().units.length;
+      };
+      const tryLoad = storageKey => {
+        harness.dispatchOn('btnLoadPage', 'click');
+        if (!harness.dispatchOn('saveListBody', 'click', { className: 'save-row', dataset: { key: storageKey } })) {
+          throw new Error('saveListBody 上没有 click 处理器');
+        }
+        if (!harness.dispatchOn('btnLoadConfirm', 'click')) {
+          throw new Error('btnLoadConfirm 上没有 click 处理器');
+        }
+        return debug.summary().units.length;
+      };
+
+      // ① 老存档：加版本号之前存下来的档没有 version 字段，应当被当作版本 1
+      //    迁移上来，正常读出 —— 也就是说局面要复原。
+      const legacy = { ...current };
+      delete legacy.version;
+      harness.storageSet('frontier_save_legacy', JSON.stringify(legacy));
+      const dirtyA = makeDirty();
+      const afterLegacy = tryLoad('frontier_save_legacy');
+      if (afterLegacy !== saved) {
+        throw new Error(`无 version 字段的老存档没能正常读出（存档里 ${saved} 个单位，改脏后 ${dirtyA}，读完 ${afterLegacy}）`);
+      }
+
+      // ② 未来存档：版本号比当前支持的还新，必须**拒绝**而不是硬读 ——
+      //    硬读的表现是能开局但行为诡异，比直接报错难查得多。
+      //    拒绝的表现就是局面保持脏。
+      const future = { ...current, version: current.version + 99 };
+      harness.storageSet('frontier_save_future', JSON.stringify(future));
+      const dirtyB = makeDirty();
+      const afterFuture = tryLoad('frontier_save_future');
+      if (afterFuture !== dirtyB) {
+        throw new Error(`版本号超前的存档被读进来了，应当拒绝（改脏后 ${dirtyB}，读完 ${afterFuture}）`);
+      }
+
+      // ③ 残档：state 里缺必需字段。同样必须在入口拦住 —— 少了 goldByOwner
+      //    这类字段不会在读档那一刻崩，而是等到某个 AI 要算钱时才炸。
+      const broken = { ...current, state: { ...current.state } };
+      delete broken.state.goldByOwner;
+      harness.storageSet('frontier_save_broken', JSON.stringify(broken));
+      const dirtyC = makeDirty();
+      const afterBroken = tryLoad('frontier_save_broken');
+      if (afterBroken !== dirtyC) {
+        throw new Error(`缺少必需字段的残档被读进来了，应当拒绝（改脏后 ${dirtyC}，读完 ${afterBroken}）`);
+      }
+      return `v${current.version} · 老档可迁移、超前档与残档被拒`;
+    }
   }
 ];
 
@@ -434,20 +506,32 @@ function findInteractionSpots(harness) {
   };
 }
 
-// 用固定种子跑，理由和 verify 一样：布点、地形、初始兵力全靠 Math.random，// 不固定的话每次跑的都是不同的局 —— 断言就会时绿时红，而红的原因往往是"这次
-// 敌人恰好离得近"而不是代码坏了（这是实际踩到的：点敌人有时触发攻击分支）。
+// 装上种子化随机数，返回还原函数。
+//
+// 用固定种子跑，理由和 verify 一样：布点、地形、初始兵力、**战斗结果**全靠
+// Math.random，不固定的话每次跑的都是不同的局 —— 断言就会时绿时红，而红的原因
+// 往往是"这次敌人恰好离得近"而不是代码坏了（实际踩到过两次：点敌人有时触发
+// 攻击分支；交互链里同一次攻击跑出过"10→1""10→2""目标阵亡"三种结果）。
 // 和 fastBatch 用的是同一个 LCG，跑完必须还原，否则会污染后续用例。
-function withSeed(seed, fn) {
+//
+// 分成 beginSeed / withSeed 两个形式是为了 diff 干净：用例体有一百多行，
+// 包成闭包会让整段缩进全变。长段落用 beginSeed + finally，短调用用 withSeed。
+function beginSeed(seed) {
   const orig = Math.random;
   let state = seed >>> 0;
   Math.random = () => {
     state = (state * 1664525 + 1013904223) >>> 0;
     return state / 4294967296;
   };
+  return () => { Math.random = orig; };
+}
+
+function withSeed(seed, fn) {
+  const restore = beginSeed(seed);
   try {
     return fn();
   } finally {
-    Math.random = orig;
+    restore();
   }
 }
 
@@ -539,9 +623,12 @@ function main() {
   }
   CASES.forEach((item, index) => {
     harness.setConfig(baseConfig(item.config));
+    // 整个用例都在固定种子下跑，不只是 newGame —— 交互链里的战斗同样消耗随机数，
+    // 只包 newGame 会让同一次攻击在"打残"和"打死"之间摇摆（实测跑出过三种结果）。
+    // 当前的断言宽容到不会因此假红，但下一条更严格的断言就会时绿时红。
+    const restoreRandom = beginSeed(SEED + index * 2654435761);
     try {
-      // 每个用例一个固定种子（错开，避免几张图长得一样）。
-      withSeed(SEED + index * 2654435761, () => harness.debug.newGame());
+      harness.debug.newGame();
       // newGame 在非 fastSim 下把首回合交给 runLoadingScreen 的 setInterval，
       // 绘制不会同步发生 —— 必须显式调这几个入口才能真正命中界面层。
       requireEntry(harness.debug, 'redraw');
@@ -677,6 +764,9 @@ function main() {
       failed += 1;
       console.log(`  FAIL ${item.id}`);
       console.log(`       ${(err && err.message) || err}`);
+    } finally {
+      // 必须还原，否则后续用例（以及进程里别的东西）会继续跑在这个种子上。
+      restoreRandom();
     }
   });
   if (failed) {

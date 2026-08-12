@@ -407,6 +407,9 @@ function createHarness(initialConfig = {}, { nocache = false, strictCanvas = fal
     // 存档后端的直接视图。用来断言"保存真的写进去了"而不只是"没抛错"。
     storageKeys: () => [...storageData.keys()],
     storageGet: key => (storageData.has(key) ? storageData.get(key) : null),
+    // 直接塞一份存档进去。用来构造"旧版本存档"和"版本号比当前还新的存档"，
+    // 验证 io/savestate.js 的迁移与拒绝逻辑 —— 那两条路径靠正常保存走不到。
+    storageSet: (key, value) => { storageData.set(String(key), String(value)); },
     storageClear: () => storageData.clear(),
     // downloadSaveFile 导出过的文件内容（JSON 字符串）。无头环境里不真的下载。
     downloads: () => downloads.slice(),

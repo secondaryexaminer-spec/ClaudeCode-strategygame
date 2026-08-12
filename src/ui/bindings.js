@@ -54,7 +54,7 @@ export function createBindings(rt, deps) {
     autoLoadAdjacent, autoUnloadAdjacent, endGameNeutral,
     // 存档
     buildSavePayload, saveAsNewSave, overwriteCurrentSave, importSaveToList,
-    currentSaveName, loadSave, deleteSave, readSave
+    currentSaveName, loadSave, deleteSave, readSave, lastSaveError
   } = deps;
 
   // 读档页面上当前高亮的那一行，见文件头。
@@ -311,7 +311,9 @@ export function createBindings(rt, deps) {
         return;
       }
       if (!loadSave(selectedSaveKey)) {
-        rt.toast('该存档已损坏，无法读取。');
+        // 具体原因由 io/savestate.js 的校验给出（版本太新、缺字段、尺寸对不上），
+        // 比笼统的"已损坏"有用 —— 玩家至少知道是不是该换个版本打开。
+        rt.toast(`无法读取该存档：${lastSaveError() || '内容已损坏'}。`);
       }
     };
     $('btnLoadDelete').onclick = () => {
@@ -356,7 +358,7 @@ export function createBindings(rt, deps) {
             renderSaveList();
             rt.toast('已导入存档并加入列表，点击它即可继续。');
           } else {
-            rt.toast('导入失败：文件格式不正确。');
+            rt.toast(`导入失败：${lastSaveError() || '文件格式不正确'}。`);
           }
         } catch (err) {
           rt.toast('导入失败：文件无法解析。');
