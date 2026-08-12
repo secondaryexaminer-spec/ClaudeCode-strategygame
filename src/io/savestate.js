@@ -18,6 +18,7 @@
 //   改字段含义 / 改名 → **必须升**，并在 MIGRATIONS 里写一条迁移。
 //   删字段            → 必须升。
 // 不升版本就改结构，表现是旧存档读进来能开局但行为诡异 —— 比默认崩溃难查得多。
+import { normalizeRules } from '../core/rules.js';
 
 // 当前存档格式版本。
 export const SAVE_VERSION = 2;
@@ -113,7 +114,7 @@ export function migrateSaveState(payload) {
   return current;
 }
 
-// 读档入口：迁移 + 校验一次做完。返回 { payload } 或 { error }。
+// 读档入口：迁移 + 校验 + 规则规范化，一次做完。返回 { payload } 或 { error }。
 export function parseSaveState(raw) {
   const migrated = migrateSaveState(raw);
   if (!migrated) {
@@ -121,5 +122,13 @@ export function parseSaveState(raw) {
     return { error: version > SAVE_VERSION ? `存档版本 ${version} 比当前支持的 ${SAVE_VERSION} 还新` : '存档版本无法识别' };
   }
   const problem = validateSaveState(migrated);
-  return problem ? { error: problem } : { payload: migrated };
+  if (problem) {
+    return { error: problem };
+  }
+  // 存档里的 settings 可能来自旧版本，也可能被手改过。规范化一遍把非法值换成
+  // 默认值 —— 否则一个 NaN 会顺着 settings 一路飘进布点和出兵，直到某个坐标
+  // 算出 NaN 才炸，那时已经离读档很远了。
+  const { config, fixed } = normalizeRules(migrated.state.settings);
+  migrated.state.settings = config;
+  return { payload: migrated, fixedFields: fixed };
 }

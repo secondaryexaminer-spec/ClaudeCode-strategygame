@@ -391,7 +391,29 @@ const INTERACTION_CHECKS = [
       if (afterBroken !== dirtyC) {
         throw new Error(`缺少必需字段的残档被读进来了，应当拒绝（改脏后 ${dirtyC}，读完 ${afterBroken}）`);
       }
-      return `v${current.version} · 老档可迁移、超前档与残档被拒`;
+
+      // ④ 设置被改坏的存档：能读，但非法的 settings 要被规范化掉。
+      //    和上面三条不同 —— 这一条要求**读得进来**，只是把烂值换成默认值。
+      //    没有它的话 core/rules.js 的 normalizeRules 就是死代码：写错了不会
+      //    有任何征兆，而一个 NaN 会顺着 settings 飘进布点，直到某个坐标算出
+      //    NaN 才炸。
+      const messy = { ...current, state: { ...current.state, settings: { ...current.state.settings } } };
+      messy.state.settings.spread = 'not-a-number';
+      messy.state.settings.buildCap = 99999;
+      harness.storageSet('frontier_save_messy', JSON.stringify(messy));
+      const dirtyD = makeDirty();
+      const afterMessy = tryLoad('frontier_save_messy');
+      if (afterMessy !== saved) {
+        throw new Error(`设置被改坏的存档没能读进来（改脏后 ${dirtyD}，读完 ${afterMessy}，期望 ${saved}）`);
+      }
+      const fixedSettings = debug.settings();
+      if (!Number.isFinite(fixedSettings.spread)) {
+        throw new Error(`读档后 settings.spread 仍然不是数字（${fixedSettings.spread}），normalizeRules 没生效`);
+      }
+      if (fixedSettings.buildCap > 100) {
+        throw new Error(`读档后 settings.buildCap 是 ${fixedSettings.buildCap}，超出控件范围 100，没有被钳制`);
+      }
+      return `v${current.version} · 老档可迁移、超前档与残档被拒、烂设置被修正`;
     }
   }
 ];

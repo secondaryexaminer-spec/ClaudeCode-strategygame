@@ -163,6 +163,13 @@ export function createDebugHooks(rt, deps) {
     return true;
   }
 
+  // 当前对局的规则配置。**不放进 debugSummary** —— 那个的字段是行为基线的
+  // 一部分，加字段会让 sim/baseline.json 整体失效。
+  // 用途是断言"读档时非法的 settings 被规范化掉了"（见 core/rules.js）。
+  function settings() {
+    return { ...(rt.game?.settings || {}) };
+  }
+
   // 地形与尺寸查询。烟雾测试要在图上找"空的海格挨着空的陆格"这类位置来摆棋盘，
   // 而 debugSummary 只带单位和据点，不带地形。
   function terrainAt(x, y) {
@@ -272,7 +279,7 @@ export function createDebugHooks(rt, deps) {
     newGame: () => newGame(),
     redraw, repaintUi, repaintStats, repaintLobby,
     clickCell, placeUnit, inspectCell, selection, terrainAt, dimensions,
-    probeTerrain, mapCatalog,
+    probeTerrain, mapCatalog, settings,
     armEngineerLaunch, wheelZoom, dragPan
   };
 }

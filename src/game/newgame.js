@@ -35,6 +35,7 @@ import {
 } from '../core/constants.js';
 import { cellKey } from '../core/utils.js';
 import { terrainFor } from '../world/mapgen.js';
+import { readRules } from '../core/rules.js';
 
 // 每个阵营的起始金币。见文件头：改它等于改所有基线。
 const START_GOLD = 45;
@@ -72,23 +73,13 @@ export function createNewGame(rt, deps) {
     return { aiCount, spectator, owners, teams, aiProfiles, ownerColors };
   }
 
+  // 规则配置的字段、默认值与范围都在 core/rules.js —— 这里只负责把"从大厅
+  // DOM 读"这个具体来源接上去。换成从预设或存档读，只需换掉这个读取函数。
   function readSettings(config) {
-    return {
-      map: $('mapSelect').value,
-      mode: $('modeSelect').value,
+    return readRules(id => $(id)?.value, {
       spectator: config.spectator,
-      ai: config.aiCount,
-      start: Number($('startUnitsSelect').value),
-      size: $('sizeSelect').value,
-      aspect: $('aspectSelect').value,
-      aiSpeed: Number($('aiSpeed').value),
-      complexity: $('complexitySelect').value,
-      spread: Number($('citySpread').value),
-      deploy: $('deploymentSelect').value,
-      buildCap: Number($('buildCap').value),
-      incomeMult: Number($('incomeMult').value),
-      siteDensity: Number($('siteDensity').value)
-    };
+      ai: config.aiCount
+    });
   }
 
   function emptyStats(owners) {
@@ -109,7 +100,15 @@ export function createNewGame(rt, deps) {
   function newGame() {
     const config = readLobbyConfig();
     const { owners, spectator } = config;
-    const dimensions = rt.computeDimensions($('sizeSelect').value, $('aspectSelect').value);
+    // ⚠️ 配置**只读这一次**，之后一律用 settings，不要再回头读 DOM。
+    //
+    // 原来这里有两条读取路径：地形和尺寸直接 `$('mapSelect').value`，而
+    // settings 走 readSettings —— 同一个选项被读了两遍。两条路径迟早会分叉
+    // （比如将来从存档或预设开局时只喂了 settings），表现是"存档里写着海峡图，
+    // 生成出来却是平原"。实际影响过测试：改坏 rules.js 里 map 字段的控件 id，
+    // 行为基线竟然全绿，因为地形压根不看 settings.map。
+    const settings = readSettings(config);
+    const dimensions = rt.computeDimensions(settings.size, settings.aspect);
     rt.setDimensions(dimensions.w, dimensions.h);
     // 小图用大格子看得清，大图用小格子换视野 —— 超出视口的部分靠平移。
     rt.setCellSize(dimensions.w <= 22 ? 52 : 44);
@@ -125,7 +124,7 @@ export function createNewGame(rt, deps) {
     clearDistFieldCache();
 
     rt.setGame({
-      terrain: terrainFor($('mapSelect').value, $('complexitySelect').value, W, H),
+      terrain: terrainFor(settings.map, settings.complexity, W, H),
       units: [],
       sites: [],
       ownerOrder: owners,
@@ -143,7 +142,7 @@ export function createNewGame(rt, deps) {
       pendingOrder: null,
       goldByOwner: Object.fromEntries(owners.map(owner => [owner, START_GOLD])),
       stats: emptyStats(owners),
-      settings: readSettings(config)
+      settings
     });
     const game = rt.game;
 

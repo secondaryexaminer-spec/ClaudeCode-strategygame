@@ -1404,6 +1404,65 @@
     return terrain;
   }
 
+  // src/core/rules.js
+  var RULES_FIELDS = {
+    map: { from: "mapSelect", kind: "text", fallback: "strait" },
+    mode: { from: "modeSelect", kind: "text", fallback: "conquest" },
+    start: { from: "startUnitsSelect", kind: "int", fallback: 6 },
+    size: { from: "sizeSelect", kind: "text", fallback: "medium" },
+    aspect: { from: "aspectSelect", kind: "text", fallback: "standard" },
+    complexity: { from: "complexitySelect", kind: "text", fallback: "medium" },
+    deploy: { from: "deploymentSelect", kind: "text", fallback: "tight" },
+    // 以下三个是 <input type="range">，范围抄自 index.html。
+    aiSpeed: { from: "aiSpeed", kind: "int", fallback: 3, min: 1, max: 10 },
+    spread: { from: "citySpread", kind: "int", fallback: 50, min: 0, max: 100 },
+    buildCap: { from: "buildCap", kind: "int", fallback: 100, min: 1, max: 100 },
+    // 以下两个是 <select>，值是 0.5 / 1 / 1.5 这类倍率，不钳范围。
+    incomeMult: { from: "incomeMult", kind: "number", fallback: 1 },
+    siteDensity: { from: "siteDensity", kind: "number", fallback: 1 }
+  };
+  var EXTERNAL_FIELDS = ["spectator", "ai"];
+  function coerce(raw, field) {
+    if (field.kind === "text") {
+      return raw === void 0 || raw === null || raw === "" ? field.fallback : String(raw);
+    }
+    const value = field.kind === "int" ? parseInt(raw, 10) : Number(raw);
+    if (!Number.isFinite(value)) {
+      return field.fallback;
+    }
+    if (field.min !== void 0 && value < field.min) {
+      return field.min;
+    }
+    if (field.max !== void 0 && value > field.max) {
+      return field.max;
+    }
+    return value;
+  }
+  function readRules(readValue, external = {}) {
+    const out = {};
+    for (const [key, field] of Object.entries(RULES_FIELDS)) {
+      out[key] = coerce(readValue(field.from), field);
+    }
+    for (const key of EXTERNAL_FIELDS) {
+      out[key] = external[key];
+    }
+    return out;
+  }
+  function normalizeRules(raw) {
+    const source = raw || {};
+    const out = {};
+    const fixed = [];
+    for (const [key, field] of Object.entries(RULES_FIELDS)) {
+      const before = source[key];
+      const after = coerce(before, field);
+      out[key] = after;
+      if (before !== void 0 && String(before) !== String(after)) {
+        fixed.push(key);
+      }
+    }
+    return { config: { ...source, ...out }, fixed };
+  }
+
   // src/game/newgame.js
   var START_GOLD = 45;
   var EMPTY_STRAT = {
@@ -1447,22 +1506,10 @@
       return { aiCount, spectator, owners, teams, aiProfiles, ownerColors };
     }
     function readSettings(config) {
-      return {
-        map: $("mapSelect").value,
-        mode: $("modeSelect").value,
+      return readRules((id) => $(id)?.value, {
         spectator: config.spectator,
-        ai: config.aiCount,
-        start: Number($("startUnitsSelect").value),
-        size: $("sizeSelect").value,
-        aspect: $("aspectSelect").value,
-        aiSpeed: Number($("aiSpeed").value),
-        complexity: $("complexitySelect").value,
-        spread: Number($("citySpread").value),
-        deploy: $("deploymentSelect").value,
-        buildCap: Number($("buildCap").value),
-        incomeMult: Number($("incomeMult").value),
-        siteDensity: Number($("siteDensity").value)
-      };
+        ai: config.aiCount
+      });
     }
     function emptyStats(owners) {
       return {
@@ -1481,7 +1528,8 @@
     function newGame() {
       const config = readLobbyConfig();
       const { owners, spectator } = config;
-      const dimensions = rt.computeDimensions($("sizeSelect").value, $("aspectSelect").value);
+      const settings = readSettings(config);
+      const dimensions = rt.computeDimensions(settings.size, settings.aspect);
       rt.setDimensions(dimensions.w, dimensions.h);
       rt.setCellSize(dimensions.w <= 22 ? 52 : 44);
       const W = rt.W;
@@ -1492,7 +1540,7 @@
       rt.currentSaveKey = null;
       clearDistFieldCache();
       rt.setGame({
-        terrain: terrainFor($("mapSelect").value, $("complexitySelect").value, W, H),
+        terrain: terrainFor(settings.map, settings.complexity, W, H),
         units: [],
         sites: [],
         ownerOrder: owners,
@@ -1510,7 +1558,7 @@
         pendingOrder: null,
         goldByOwner: Object.fromEntries(owners.map((owner) => [owner, START_GOLD])),
         stats: emptyStats(owners),
-        settings: readSettings(config)
+        settings
       });
       const game = rt.game;
       game.sites = makeCities(config.aiCount, game.settings.size, game.settings.spread);
@@ -1718,7 +1766,12 @@
       return { error: version > SAVE_VERSION ? `存档版本 ${version} 比当前支持的 ${SAVE_VERSION} 还新` : "存档版本无法识别" };
     }
     const problem = validateSaveState(migrated);
-    return problem ? { error: problem } : { payload: migrated };
+    if (problem) {
+      return { error: problem };
+    }
+    const { config, fixed } = normalizeRules(migrated.state.settings);
+    migrated.state.settings = config;
+    return { payload: migrated, fixedFields: fixed };
   }
 
   // src/io/saves.js
@@ -4750,6 +4803,9 @@
       game.pendingOrder = { kind: "engineer-launch", builderId, product, cargoTypes };
       return true;
     }
+    function settings() {
+      return { ...rt.game?.settings || {} };
+    }
     function terrainAt(x, y) {
       if (!rt.game || !rt.inBounds(x, y)) {
         return null;
@@ -4836,6 +4892,7 @@
       dimensions,
       probeTerrain,
       mapCatalog,
+      settings,
       armEngineerLaunch,
       wheelZoom,
       dragPan
