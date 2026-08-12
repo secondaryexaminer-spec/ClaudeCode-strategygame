@@ -451,6 +451,58 @@ function withSeed(seed, fn) {
   }
 }
 
+// 地图定义自检：12 张图 × 3 复杂度 × 3 尺寸各生成一次地形。
+//
+// 为什么单独有这一项：verify 的 6 个场景只用到 4 张图，上面 4 个用例再补 2 张
+// —— 12 张里有一半从来没有任何测试跑过。地图定义数据化之后（core/mapdefs.js），
+// 一张图的 steps 写错只会毁掉那一张图，而那张图可能永远没人跑，也就永远不会红。
+//
+// 断言三件事，每件都能抓住一类真实的写错：
+//   1. 不抛错          —— op 拼错、少字段
+//   2. 地形值合法      —— fill 写了个不存在的地形名
+//   3. sea 标记要兑现  —— 声明有海的图必须真的生成出水格。这条最要紧：
+//      海图没海不会抛错，只会让运输、登陆、船厂那一整套逻辑在那张图上静默失效。
+const TERRAIN_VALUES = new Set(['plain', 'forest', 'mountain', 'road', 'water']);
+const MAP_PROBE_SIZES = [[28, 16], [40, 22], [20, 12]];
+const MAP_PROBE_COMPLEXITIES = ['low', 'medium', 'high'];
+
+function checkAllMaps(harness) {
+  requireEntry(harness.debug, 'probeTerrain');
+  requireEntry(harness.debug, 'mapCatalog');
+  const catalog = harness.debug.mapCatalog();
+  if (catalog.length < 2) {
+    throw new Error(`地图清单只有 ${catalog.length} 张，mapCatalog 多半没接上`);
+  }
+  let probes = 0;
+  for (const entry of catalog) {
+    for (const complexity of MAP_PROBE_COMPLEXITIES) {
+      for (const [w, h] of MAP_PROBE_SIZES) {
+        // 固定种子：地形生成消耗随机数，不固定的话"这张图有没有水"会时真时假。
+        const grid = withSeed(SEED, () => harness.debug.probeTerrain(entry.id, complexity, w, h));
+        probes += 1;
+        if (!Array.isArray(grid) || grid.length !== h || grid.some(row => row.length !== w)) {
+          throw new Error(`${entry.name}(${entry.id}) 在 ${w}x${h} 下没有产出对应尺寸的地形`);
+        }
+        let water = 0;
+        for (const row of grid) {
+          for (const cell of row) {
+            if (!TERRAIN_VALUES.has(cell)) {
+              throw new Error(`${entry.name}(${entry.id}) 生成了非法地形值 "${cell}"`);
+            }
+            if (cell === 'water') {
+              water += 1;
+            }
+          }
+        }
+        if (entry.sea && !water) {
+          throw new Error(`${entry.name}(${entry.id}) 声明了 sea: true，却在 ${complexity}/${w}x${h} 下一格水都没有`);
+        }
+      }
+    }
+  }
+  return `${catalog.length} 张图 · ${probes} 次生成`;
+}
+
 function main() {
   // createHarness 会触发 DOMContentLoaded → setup() → showScreen('setup')
   // → renderLobbyPreview()，所以大厅的大部分渲染在这一行就跑完了，strictDom
@@ -475,6 +527,15 @@ function main() {
     console.log(`       这 ${unbound.length} 个元素上一个事件都没挂：${unbound.join('、')}`);
   } else {
     console.log(`  OK   事件绑定       ${MUST_BE_BOUND.length} 个元素都挂上了处理器`);
+  }
+
+  // 地图定义自检。和用例无关，跑一次即可。
+  try {
+    console.log(`  OK   地图定义       ${checkAllMaps(harness)}`);
+  } catch (err) {
+    failed += 1;
+    console.log(`  FAIL 地图定义（src/core/mapdefs.js）`);
+    console.log(`       ${(err && err.message) || err}`);
   }
   CASES.forEach((item, index) => {
     harness.setConfig(baseConfig(item.config));

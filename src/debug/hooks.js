@@ -21,6 +21,8 @@
 // 观测点，优先改那边 —— 这个对象越大，生产代码为测试付出的代价越高。
 import { typeMeta } from '../core/utils.js';
 import { unit } from '../game/entities.js';
+import { MAP_DEFS } from '../core/mapdefs.js';
+import { terrainFor } from '../world/mapgen.js';
 
 export function createDebugHooks(rt, deps) {
   const {
@@ -170,6 +172,22 @@ export function createDebugHooks(rt, deps) {
     return rt.game.terrain[y][x];
   }
 
+  // 不开局，直接生成一张地形出来。
+  //
+  // 为什么需要：地图定义数据化之后（core/mapdefs.js），一张图的 steps 写错
+  // （op 拼错、少个字段、半径写成相对的）**只会毁掉那一张图**。而 verify 的
+  // 6 个场景只用到 4 张图、smoke 的用例再补 2 张 —— 12 张里有一半从来没有
+  // 任何测试跑过它。逐张开局太慢，所以开一个直通地形生成的口子。
+  function probeTerrain(mapId, complexityId, w, h) {
+    return terrainFor(mapId, complexityId, w, h);
+  }
+
+  // 有哪些地图。让测试遍历时不必自己维护一份清单 —— 那种清单迟早和
+  // core/mapdefs.js 对不上，而且是静默对不上。
+  function mapCatalog() {
+    return Object.entries(MAP_DEFS).map(([id, def]) => ({ id, name: def.name, sea: !!def.sea }));
+  }
+
   function dimensions() {
     return { w: rt.W, h: rt.H, cell: rt.S };
   }
@@ -254,6 +272,7 @@ export function createDebugHooks(rt, deps) {
     newGame: () => newGame(),
     redraw, repaintUi, repaintStats, repaintLobby,
     clickCell, placeUnit, inspectCell, selection, terrainAt, dimensions,
+    probeTerrain, mapCatalog,
     armEngineerLaunch, wheelZoom, dragPan
   };
 }

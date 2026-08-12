@@ -4632,6 +4632,12 @@
       }
       return rt.game.terrain[y][x];
     }
+    function probeTerrain(mapId, complexityId, w, h) {
+      return terrainFor(mapId, complexityId, w, h);
+    }
+    function mapCatalog() {
+      return Object.entries(MAP_DEFS).map(([id, def]) => ({ id, name: def.name, sea: !!def.sea }));
+    }
     function dimensions() {
       return { w: rt.W, h: rt.H, cell: rt.S };
     }
@@ -4704,6 +4710,8 @@
       selection,
       terrainAt,
       dimensions,
+      probeTerrain,
+      mapCatalog,
       armEngineerLaunch,
       wheelZoom,
       dragPan
