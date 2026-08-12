@@ -1,6 +1,7 @@
 'use strict';
 // Pure game data & tuning constants. No mutable runtime state lives here.
 // Bundled back into a single IIFE by esbuild; imported by src/main.js.
+import { MAP_SUMMARY } from './mapdefs.js';
 
 export const TEAMS = ['A', 'B', 'C', 'D', 'E'];
 export const OWNER_NAMES = ['赤岩军团', '紫晶军团', '琥珀军团', '翡翠军团', '钢青军团', '沙金军团', '苍鹰军团'];
@@ -64,20 +65,9 @@ export const TERRAIN = {
   water: { name: '海域', color: '#2d6f9e', cost: 1, def: 0, mark: '≈' }
 };
 
-export const MAPS = {
-  frontier: { name: '边境河谷', sea: false },
-  twinrivers: { name: '双河走廊', sea: false },
-  highlands: { name: '高地山口', sea: false },
-  plains: { name: '北方平原', sea: false },
-  heartland: { name: '中心平原', sea: false },
-  coast: { name: '海岸丘陵', sea: true },
-  islands: { name: '群岛与海峡', sea: true },
-  innersea: { name: '内海争夺', sea: true },
-  grandbay: { name: '海湾登陆', sea: true },
-  strait: { name: '裂海海峡', sea: true },
-  archipelago: { name: '断链群岛', sea: true },
-  random: { name: '随机大陆', sea: true }
-};
+// 地图清单。**真身在 core/mapdefs.js** —— 那里除了名字还带着每张图的绘制步骤。
+// 这里只是给 UI 和存档用的精简视图（名字 + 有没有海），让既有调用方不用改。
+export const MAPS = MAP_SUMMARY;
 
 export const MODES = { conquest: '征服', skirmish: '遭遇战', survival: '守城' };
 export const SIZES = {

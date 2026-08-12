@@ -4,7 +4,17 @@
 // 这里是纯函数 —— 除 Math.random 外不读任何外部状态（Math.random 在无头模拟中
 // 会被 fastBatch 换成种子化 LCG，所以同 seed 的地形完全可复现）。地图尺寸由
 // W、H 参数显式传入，而不是读 main.js 的模块级变量。
-import { COMPLEX, MAPS } from '../core/constants.js';
+//
+// 【这个文件只剩"怎么画"，"画什么"在 core/mapdefs.js】
+// 原来这里是一个 12 分支的 switch，每个分支硬编码几行绘制调用。现在每张地图是
+// 一串 steps 数据，下面的 STEP_OPS 是唯一的执行处 —— 加地图改数据，加画法改这里。
+//
+// ⚠️ **随机数消耗顺序就是行为基线的一部分**。下面每个 op 的实现都必须和原来那段
+// 代码逐次调用一致，包括看似无意义的调用：createEllipse 里即使 chance === 1 也会
+// 求一次 Math.random()，少调一次，后面所有地形、布点、出兵位置就全变了，
+// 而 sim/baseline.json 会整体对不上。
+import { COMPLEX } from '../core/constants.js';
+import { MAP_DEFS } from '../core/mapdefs.js';
 import { clamp, rnd } from '../core/utils.js';
 import { makeGrid, inBounds } from '../core/grid.js';
 
@@ -78,98 +88,89 @@ function scatter(W, H, terrain, type, count, radius, allowed) {
   }
 }
 
+// 全图铺一种地形。不消耗随机数。
+function fillAll(W, H, terrain, type) {
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      terrain[y][x] = type;
+    }
+  }
+}
+
+// 一侧的海岸线：每行从左边界铺水铺到 shore 列，shore 随 y 起伏。
+function paintShoreline(W, H, terrain, base, amplitude, frequency) {
+  for (let y = 0; y < H; y++) {
+    const shore = Math.floor(W * base + Math.sin(y * frequency) * amplitude);
+    for (let x = 0; x <= shore; x++) {
+      terrain[y][x] = 'water';
+    }
+  }
+}
+
+// 纵贯南北的水道，中心线随 y 摆动，左右各铺 halfWidth 格。
+function paintChannel(W, H, terrain, cx, amplitude, frequency, halfWidth) {
+  for (let y = 0; y < H; y++) {
+    const seaX = Math.floor(W * cx + Math.sin(y * frequency) * amplitude);
+    for (let dx = -halfWidth; dx <= halfWidth; dx++) {
+      if (inBounds(W, H, seaX + dx, y)) {
+        terrain[y][seaX + dx] = 'water';
+      }
+    }
+  }
+}
+
+// 按复杂度逐格掷骰。每格消耗一次随机数。
+function paintNoise(W, H, terrain, complexity) {
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const roll = Math.random();
+      terrain[y][x] = roll < complexity.water ? 'water' : roll < complexity.water + complexity.mountain ? 'mountain' : roll < complexity.water + complexity.mountain + complexity.forest ? 'forest' : 'plain';
+    }
+  }
+}
+
+// 半径既可以写绝对格数（rx），也可以写相对比例（rxOf）。两者只能选一个，
+// 理由见 core/mapdefs.js 顶部的坐标约定。
+function radiusOf(step, key, span) {
+  const ratio = step[`${key}Of`];
+  return ratio === undefined ? step[key] : span * ratio;
+}
+
+// 每个 op 一个实现。这是"画法"的唯一定义处 —— core/mapdefs.js 只描述画什么。
+const STEP_OPS = {
+  river: (W, H, terrain, step) => paintRiver(W, H, terrain, W * step.cx, step.phase),
+  ridge: (W, H, terrain, step) => paintRidge(W, H, terrain, H * step.cy),
+  roadCross: (W, H, terrain) => addRoadCross(W, H, terrain),
+  fill: (W, H, terrain, step) => fillAll(W, H, terrain, step.fill),
+  shoreline: (W, H, terrain, step) => paintShoreline(W, H, terrain, step.base, step.amplitude, step.frequency),
+  channel: (W, H, terrain, step) => paintChannel(W, H, terrain, step.cx, step.amplitude, step.frequency, step.halfWidth),
+  noise: (W, H, terrain, step, complexity) => paintNoise(W, H, terrain, complexity),
+  ellipse: (W, H, terrain, step) => createEllipse(
+    W, H, terrain,
+    W * step.cx, H * step.cy,
+    radiusOf(step, 'rx', W), radiusOf(step, 'ry', H),
+    step.fill, step.chance
+  )
+};
+
 export function terrainFor(mapId, complexityId, W, H) {
   const terrain = makeGrid(W, H, 'plain');
   const complexity = COMPLEX[complexityId];
-  switch (mapId) {
-    case 'frontier':
-      paintRiver(W, H, terrain, W * 0.48, 0);
-      paintRidge(W, H, terrain, H * 0.26);
-      break;
-    case 'twinrivers':
-      paintRiver(W, H, terrain, W * 0.34, 0.25);
-      paintRiver(W, H, terrain, W * 0.67, 1.15);
-      break;
-    case 'highlands':
-      paintRidge(W, H, terrain, H * 0.38);
-      paintRidge(W, H, terrain, H * 0.68);
-      break;
-    case 'plains':
-      addRoadCross(W, H, terrain);
-      break;
-    case 'heartland':
-      addRoadCross(W, H, terrain);
-      createEllipse(W, H, terrain, W * 0.2, H * 0.25, 4, 2, 'forest', 0.94);
-      createEllipse(W, H, terrain, W * 0.78, H * 0.72, 4, 3, 'forest', 0.94);
-      break;
-    case 'coast':
-      for (let y = 0; y < H; y++) {
-        const shore = Math.floor(W * 0.22 + Math.sin(y * 0.42) * 2);
-        for (let x = 0; x <= shore; x++) {
-          terrain[y][x] = 'water';
-        }
-      }
-      paintRidge(W, H, terrain, H * 0.7);
-      break;
-    case 'islands':
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          terrain[y][x] = 'water';
-        }
-      }
-      createEllipse(W, H, terrain, W * 0.22, H * 0.48, 5, 3, 'plain', 0.96);
-      createEllipse(W, H, terrain, W * 0.5, H * 0.3, 4, 2, 'plain', 0.95);
-      createEllipse(W, H, terrain, W * 0.72, H * 0.66, 6, 3, 'plain', 0.95);
-      createEllipse(W, H, terrain, W * 0.45, H * 0.78, 3, 2, 'plain', 0.92);
-      break;
-    case 'innersea':
-      createEllipse(W, H, terrain, W * 0.5, H * 0.52, W * 0.22, H * 0.3, 'water', 0.98);
-      addRoadCross(W, H, terrain);
-      break;
-    case 'grandbay':
-      createEllipse(W, H, terrain, W * 0.14, H * 0.78, W * 0.36, H * 0.42, 'water', 0.98);
-      createEllipse(W, H, terrain, W * 0.42, H * 0.58, 3, 2, 'water', 0.9);
-      break;
-    case 'strait':
-      for (let y = 0; y < H; y++) {
-        const seaX = Math.floor(W * 0.5 + Math.sin(y * 0.42) * 1.1);
-        for (let dx = -2; dx <= 2; dx++) {
-          if (inBounds(W, H, seaX + dx, y)) {
-            terrain[y][seaX + dx] = 'water';
-          }
-        }
-      }
-      createEllipse(W, H, terrain, W * 0.48, H * 0.24, 2, 1, 'plain', 1);
-      createEllipse(W, H, terrain, W * 0.5, H * 0.73, 2, 1, 'plain', 1);
-      break;
-    case 'archipelago':
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          terrain[y][x] = 'water';
-        }
-      }
-      createEllipse(W, H, terrain, W * 0.28, H * 0.34, 5, 3, 'plain', 0.96);
-      createEllipse(W, H, terrain, W * 0.62, H * 0.25, 4, 2, 'plain', 0.94);
-      createEllipse(W, H, terrain, W * 0.77, H * 0.62, 6, 3, 'plain', 0.95);
-      createEllipse(W, H, terrain, W * 0.44, H * 0.72, 5, 2, 'plain', 0.93);
-      createEllipse(W, H, terrain, W * 0.12, H * 0.74, 3, 2, 'plain', 0.92);
-      break;
-    case 'random':
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const roll = Math.random();
-          terrain[y][x] = roll < complexity.water ? 'water' : roll < complexity.water + complexity.mountain ? 'mountain' : roll < complexity.water + complexity.mountain + complexity.forest ? 'forest' : 'plain';
-        }
-      }
-      addRoadCross(W, H, terrain);
-      break;
-    default:
-      break;
+  const def = MAP_DEFS[mapId];
+  // 未知地图 ID 保持原来 switch 的 default 行为：什么都不画，只走下面的点缀。
+  for (const step of def?.steps || []) {
+    const run = STEP_OPS[step.op];
+    if (!run) {
+      throw new Error(`地图 ${mapId} 用了未知的绘制步骤 "${step.op}"`);
+    }
+    run(W, H, terrain, step, complexity);
   }
-  if (mapId !== 'random') {
+  // 后期点缀：撒森林、撒山，纯陆图再撒几个小水塘。
+  // random 图跳过 —— 它的噪声已经按复杂度铺满了这三种地形。
+  if (!def?.skipScatter) {
     scatter(W, H, terrain, 'forest', Math.max(2, Math.round(W * H * complexity.forest / 24)), 2, ['plain']);
     scatter(W, H, terrain, 'mountain', Math.max(1, Math.round(W * H * complexity.mountain / 34)), 1, ['plain']);
-    if (!MAPS[mapId].sea) {
+    if (!def?.sea) {
       scatter(W, H, terrain, 'water', Math.max(0, Math.round(W * H * complexity.water / 70)), 1, ['plain']);
     }
   }
