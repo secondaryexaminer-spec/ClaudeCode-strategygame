@@ -3740,18 +3740,51 @@
     return { uiState, updatePanels, transportConfigMarkup, setCargoPreset, engineerSelected };
   }
 
+  // src/io/input-backend.js
+  function createDomInputBackend(getCanvas) {
+    function measure() {
+      const canvas = getCanvas();
+      const rect = canvas.getBoundingClientRect();
+      return {
+        rect,
+        sx: rect.width ? canvas.width / rect.width : 1,
+        sy: rect.height ? canvas.height / rect.height : 1
+      };
+    }
+    return {
+      kind: "dom",
+      // 事件发生在画布的哪个像素上。
+      at(event) {
+        const { rect, sx, sy } = measure();
+        return {
+          x: (event.clientX - rect.left) * sx,
+          y: (event.clientY - rect.top) * sy
+        };
+      },
+      // 一段 CSS 像素位移对应多少画布像素位移（右键拖拽平移用）。
+      //
+      // ⚠️ 两个方向都乘 x 方向的比例（sx），这是**照搬原有行为**，不是笔误。
+      // 原来的 panBy 就是 `const scale = canvas.width / rect.width` 然后同时用于
+      // dx 和 dy。画布非等比拉伸时纵向拖拽会偏，看着像 bug —— 但修它会改变行为，
+      // 属于另一件事，不该混在这次抽象里顺手做掉。要修请单独一次提交，并确认
+      // 交互链里的拖拽断言仍然通过。
+      delta(dxCss, dyCss) {
+        const { sx } = measure();
+        return { dx: dxCss * sx, dy: dyCss * sx };
+      }
+    };
+  }
+
   // src/ui/input.js
   function createInput(rt) {
     let panState = null;
     let panSuppressContext = false;
+    const pointer = createDomInputBackend(() => rt.canvas);
     function tileFromEvent(event) {
-      const canvas = rt.canvas;
-      const rect = canvas.getBoundingClientRect();
-      const sx = (event.clientX - rect.left) * canvas.width / rect.width;
-      const sy = (event.clientY - rect.top) * canvas.height / rect.height;
+      const point = pointer.at(event);
       return {
-        x: Math.floor((rt.cam.x + sx / rt.zoom) / rt.S),
-        y: Math.floor((rt.cam.y + sy / rt.zoom) / rt.S)
+        x: Math.floor((rt.cam.x + point.x / rt.zoom) / rt.S),
+        y: Math.floor((rt.cam.y + point.y / rt.zoom) / rt.S)
       };
     }
     function selectRef(kind, ref) {
@@ -3857,15 +3890,12 @@
       rt.advanceTurn();
     }
     function zoomAt(event) {
-      const canvas = rt.canvas;
-      const rect = canvas.getBoundingClientRect();
-      const sx = (event.clientX - rect.left) * canvas.width / rect.width;
-      const sy = (event.clientY - rect.top) * canvas.height / rect.height;
-      const worldX = rt.cam.x + sx / rt.zoom;
-      const worldY = rt.cam.y + sy / rt.zoom;
+      const point = pointer.at(event);
+      const worldX = rt.cam.x + point.x / rt.zoom;
+      const worldY = rt.cam.y + point.y / rt.zoom;
       rt.zoom = clamp(rt.zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), rt.minZoom(), 3);
-      rt.cam.x = worldX - sx / rt.zoom;
-      rt.cam.y = worldY - sy / rt.zoom;
+      rt.cam.x = worldX - point.x / rt.zoom;
+      rt.cam.y = worldY - point.y / rt.zoom;
       rt.clampCam();
     }
     function beginPan(event) {
@@ -3877,16 +3907,14 @@
       if (!panState) {
         return false;
       }
-      const canvas = rt.canvas;
-      const rect = canvas.getBoundingClientRect();
-      const scale = canvas.width / rect.width;
-      const dx = event.clientX - panState.x;
-      const dy = event.clientY - panState.y;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+      const dxCss = event.clientX - panState.x;
+      const dyCss = event.clientY - panState.y;
+      if (Math.abs(dxCss) > 2 || Math.abs(dyCss) > 2) {
         panState.moved = true;
       }
-      rt.cam.x -= dx * scale / rt.zoom;
-      rt.cam.y -= dy * scale / rt.zoom;
+      const { dx, dy } = pointer.delta(dxCss, dyCss);
+      rt.cam.x -= dx / rt.zoom;
+      rt.cam.y -= dy / rt.zoom;
       panState.x = event.clientX;
       panState.y = event.clientY;
       rt.clampCam();

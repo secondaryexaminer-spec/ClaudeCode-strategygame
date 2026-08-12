@@ -30,7 +30,8 @@
 // 【摄像机交互为什么也在这里】
 // zoomAt / panBy / beginPan 处理的是"鼠标怎么变成摄像机位移"，和 onBoard 一样是
 // 输入翻译；真正的坐标夹取在 render/board.js 的 clampCam 里。分界线是：这个文件
-// 只懂事件（clientX/clientY、按键、滚轮方向），board.js 只懂世界坐标。
+// 只懂事件语义（哪个键、滚轮方向）和格子换算，io/input-backend.js 只懂"事件落在
+// 画布的哪个像素上"，board.js 只懂世界坐标。
 //
 // 【这个模块是 verify 的盲区，但烟雾测试覆盖得比较完整】
 // 行为基线（npm run verify）跑的是 fastBatch，不会有任何鼠标事件 —— 这个文件
@@ -45,6 +46,7 @@
 //
 // 仍然没测的：观战分支、同格叠放的循环切换、contextmenu 抑制。改这几处要开浏览器。
 import { clamp } from '../core/utils.js';
+import { createDomInputBackend } from '../io/input-backend.js';
 
 export function createInput(rt) {
   // 右键拖拽平移的状态。moved 用来区分"拖拽结束"和"单纯右键点一下"——
@@ -52,17 +54,16 @@ export function createInput(rt) {
   let panState = null;
   let panSuppressContext = false;
 
-  // 屏幕坐标 → 格子坐标。canvas 的 CSS 尺寸和它的像素尺寸可以不一样
-  // （响应式布局会拉伸它），所以要先按 width/rect.width 换算回像素，
-  // 再除以 zoom 和格子边长 S。少任何一步，缩放后点击就会偏。
+  // 事件 → 画布像素坐标的换算全部交给后端，见 io/input-backend.js。
+  // 这段换算原来在下面重复了三次（点击、缩放、拖拽各一份）。
+  const pointer = createDomInputBackend(() => rt.canvas);
+
+  // 屏幕坐标 → 格子坐标。
   function tileFromEvent(event) {
-    const canvas = rt.canvas;
-    const rect = canvas.getBoundingClientRect();
-    const sx = (event.clientX - rect.left) * canvas.width / rect.width;
-    const sy = (event.clientY - rect.top) * canvas.height / rect.height;
+    const point = pointer.at(event);
     return {
-      x: Math.floor((rt.cam.x + sx / rt.zoom) / rt.S),
-      y: Math.floor((rt.cam.y + sy / rt.zoom) / rt.S)
+      x: Math.floor((rt.cam.x + point.x / rt.zoom) / rt.S),
+      y: Math.floor((rt.cam.y + point.y / rt.zoom) / rt.S)
     };
   }
 
@@ -185,15 +186,12 @@ export function createInput(rt) {
   // 改完 zoom 再反推 cam，让那一点还停在光标下面。没有这步的话，
   // 缩放会以画布左上角为中心，手感很差。
   function zoomAt(event) {
-    const canvas = rt.canvas;
-    const rect = canvas.getBoundingClientRect();
-    const sx = (event.clientX - rect.left) * canvas.width / rect.width;
-    const sy = (event.clientY - rect.top) * canvas.height / rect.height;
-    const worldX = rt.cam.x + sx / rt.zoom;
-    const worldY = rt.cam.y + sy / rt.zoom;
+    const point = pointer.at(event);
+    const worldX = rt.cam.x + point.x / rt.zoom;
+    const worldY = rt.cam.y + point.y / rt.zoom;
     rt.zoom = clamp(rt.zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), rt.minZoom(), 3);
-    rt.cam.x = worldX - sx / rt.zoom;
-    rt.cam.y = worldY - sy / rt.zoom;
+    rt.cam.x = worldX - point.x / rt.zoom;
+    rt.cam.y = worldY - point.y / rt.zoom;
     rt.clampCam();
   }
 
@@ -208,17 +206,15 @@ export function createInput(rt) {
     if (!panState) {
       return false;
     }
-    const canvas = rt.canvas;
-    const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / rect.width;
-    const dx = event.clientX - panState.x;
-    const dy = event.clientY - panState.y;
+    const dxCss = event.clientX - panState.x;
+    const dyCss = event.clientY - panState.y;
     // 2 像素的容差：手抖不算拖拽，右键还是要弹出菜单的。
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+    if (Math.abs(dxCss) > 2 || Math.abs(dyCss) > 2) {
       panState.moved = true;
     }
-    rt.cam.x -= dx * scale / rt.zoom;
-    rt.cam.y -= dy * scale / rt.zoom;
+    const { dx, dy } = pointer.delta(dxCss, dyCss);
+    rt.cam.x -= dx / rt.zoom;
+    rt.cam.y -= dy / rt.zoom;
     panState.x = event.clientX;
     panState.y = event.clientY;
     rt.clampCam();
